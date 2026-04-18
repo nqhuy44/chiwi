@@ -1,0 +1,46 @@
+services:
+  chiwi-api:
+    build: .
+    container_name: chiwi-api
+    ports:
+      - "8000:8000"
+    env_file:
+      - .env
+    depends_on:
+      chiwi-mongo:
+        condition: service_started
+      chiwi-redis:
+        condition: service_started
+    restart: unless-stopped
+
+  chiwi-mongo:
+    image: mongo:7
+    container_name: chiwi-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    restart: unless-stopped
+
+  chiwi-redis:
+    image: redis:7-alpine
+    container_name: chiwi-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+  chiwi-worker:
+    build: .
+    container_name: chiwi-worker
+    env_file:
+      - .env
+    command: ["python", "-m", "src.worker"]
+    depends_on:
+      chiwi-mongo:
+        condition: service_started
+      chiwi-redis:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  mongo_data:
