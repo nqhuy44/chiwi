@@ -101,8 +101,8 @@ Five specialized agents, each with a distinct system prompt and toolset. See [AG
 graph LR
     subgraph Docker Host ["🐳 Docker Compose (Self-Hosted)"]
         APP["chiwi-api<br/>FastAPI + Uvicorn"]
-        MONGO["chiwi-mongo<br/>MongoDB 7.x"]
-        REDIS["chiwi-redis<br/>Redis 7.x"]
+        MONGO["chiwi-mongo<br/>MongoDB 8.x"]
+        REDIS["chiwi-redis<br/>Redis 8.x"]
         WORKER["chiwi-worker<br/>Scheduled Jobs"]
     end
 

@@ -33,3 +33,9 @@ htmlcov/
 
 # mypy
 .mypy_cache/
+
+# data
+./data/
+
+# test reports
+reports/

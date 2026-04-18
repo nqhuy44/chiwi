@@ -8,8 +8,8 @@
 | **Web Framework** | FastAPI | 0.115+ | High performance async API, automatic OpenAPI docs, Pydantic-native validation |
 | **Agent Orchestration** | LangGraph | 0.4+ | Stateful multi-agent workflows with conditional routing, built-in checkpointing |
 | **LLM Provider** | Google Gemini | 2.5 Flash / 2.5 Pro | Massive context window, native JSON mode, strong Vietnamese language support, cost-effective |
-| **Database** | MongoDB | 7.x | Schema-less design for unpredictable AI metadata, high write throughput |
-| **Cache / State** | Redis | 7.x | Sub-millisecond latency for session management, conversation memory, rate limiting |
+| **Database** | MongoDB | 8.x | Schema-less design for unpredictable AI metadata, high write throughput |
+| **Cache / State** | Redis | 8.x | Sub-millisecond latency for session management, conversation memory, rate limiting |
 | **Interface** | Telegram Bot API | Latest | Zero UI development effort, cross-platform, built-in notification system |
 | **Dashboard** | Telegram Mini App | - | Rich visual charts within Telegram, no separate app deployment |
 | **Containerization** | Docker + Compose | 27+ / 2.x | Reproducible builds, single-command deployment, self-hosted friendly |
