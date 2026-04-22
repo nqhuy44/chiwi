@@ -79,9 +79,17 @@ class NudgeResult(BaseModel):
 class ReportRequest(BaseModel):
     user_id: str
     report_type: Literal[
-        "daily_summary", "weekly_summary", "monthly_report", "goal_progress"
+        "summary", "daily_summary", "weekly_summary", "monthly_report", "goal_progress"
     ]
-    period: str  # e.g., "2026-04-20", "2026-W16", "2026-04"
+    period: str  # e.g., "today", "this_week", "this_month"
+
+
+class AnalysisRequest(BaseModel):
+    user_id: str
+    analysis_type: Literal["compare", "trend", "deep_dive"]
+    period: str  # e.g., "this_week", "this_month"
+    compare_period: str | None = None  # e.g., "last_week"
+    category_filter: str | None = None  # e.g., "Ăn uống"
 
 
 # --- API Responses ---

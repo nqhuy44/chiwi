@@ -1,0 +1,15 @@
+[
+  {"name": "Ăn uống", "icon_emoji": "🍔"},
+  {"name": "Cà phê / Trà sữa", "icon_emoji": "☕", "parent_category": "Ăn uống"},
+  {"name": "Di chuyển", "icon_emoji": "🚗"},
+  {"name": "Mua sắm", "icon_emoji": "🛒"},
+  {"name": "Giải trí", "icon_emoji": "🎬"},
+  {"name": "Sức khỏe", "icon_emoji": "💊"},
+  {"name": "Giáo dục", "icon_emoji": "📚"},
+  {"name": "Hóa đơn & Tiện ích", "icon_emoji": "💡"},
+  {"name": "Chuyển khoản", "icon_emoji": "🔄"},
+  {"name": "Thu nhập", "icon_emoji": "💰"},
+  {"name": "Tiết kiệm", "icon_emoji": "🏦"},
+  {"name": "Đầu tư", "icon_emoji": "📈"},
+  {"name": "Khác", "icon_emoji": "❓"}
+]

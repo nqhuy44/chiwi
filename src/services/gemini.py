@@ -80,6 +80,16 @@ class GeminiService:
                         system_instruction=system_prompt,
                         temperature=temperature,
                         response_mime_type="application/json",
+                        safety_settings=[
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_HARASSMENT",
+                                threshold="BLOCK_NONE",
+                            ),
+                            types.SafetySetting(
+                                category="HARM_CATEGORY_HATE_SPEECH",
+                                threshold="BLOCK_NONE",
+                            ),
+                        ],
                     ),
                 )
                 raw = (response.text or "").strip()

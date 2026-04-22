@@ -16,6 +16,8 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: str = ""
     telegram_webhook_url: str = ""
+    telegram_message_max_age_seconds: int = 120  # Drop messages older than this
+    telegram_rate_limit_per_minute: int = 20  # Max messages per user per minute
 
     # MongoDB
     mongodb_uri: str = "mongodb://localhost:27017"
@@ -26,6 +28,11 @@ class Settings(BaseSettings):
 
     # Security
     pii_mask_enabled: bool = True
+
+    # Categories — path to a JSON file with the list of spending categories
+    # used by the Tagging Agent and seeded into the categories collection.
+    # Empty → use the bundled default at <project>/config/categories.json.
+    categories_file: str = ""
 
     @property
     def allowed_user_ids(self) -> list[str]:

@@ -1,0 +1,17 @@
+.venv
+__pycache__
+*.pyc
+.git
+.env
+data/
+reports/
+tests/
+.coverage
+.pytest_cache
+.vscode
+.idea
+Dockerfile
+Makefile
+README.md
+docs/
+scripts/

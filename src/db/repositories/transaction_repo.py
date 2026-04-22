@@ -40,6 +40,26 @@ class TransactionRepository:
         )
         return await cursor.to_list(length=limit)
 
+    async def find_by_merchant(
+        self,
+        user_id: str,
+        merchant_name: str,
+        limit: int = 5,
+    ) -> list[dict]:
+        """Recent transactions for this user + merchant, newest first.
+
+        Powers the TaggingAgent's historical memory: repeated classifications
+        for the same merchant should converge to the same category.
+        """
+        cursor = (
+            self.collection.find(
+                {"user_id": user_id, "merchant_name": merchant_name}
+            )
+            .sort("transaction_time", -1)
+            .limit(limit)
+        )
+        return await cursor.to_list(length=limit)
+
     async def update_category(
         self, transaction_id: str, category_id: str
     ) -> bool:

@@ -2,7 +2,7 @@
 
 ## Overview
 
-ChiWi operates as a **swarm of 5 specialized AI agents**, each with a distinct system prompt, toolset, and responsibility. The agents are orchestrated by a central **LangGraph Orchestrator** that follows a **"Think-First"** routing pattern.
+ChiWi operates as a **swarm of 6 specialized AI agents**, each with a distinct system prompt, toolset, and responsibility. The agents are orchestrated by a central **Orchestrator** that follows a **"Think-First"** routing pattern.
 
 ## Orchestration Model
 
@@ -14,15 +14,18 @@ flowchart TD
     ORCH -->|chat / voice| CA["💬 Conversational Agent"]
     ORCH -->|scheduled| BA["🧠 Behavioral Agent"]
     ORCH -->|report request| RA["📊 Reporting Agent"]
+    ORCH -->|analysis request| AA["🔬 Analytics Agent"]
 
     IA --> TA["🏷️ Tagging Agent"]
     CA --> TA
     TA --> DB[("🗄️ MongoDB")]
     DB --> BA
     DB --> RA
+    DB --> AA
 
     BA --> TG_NUDGE["📲 Nudge via Telegram"]
     RA --> TG_REPORT["📈 Report via Telegram"]
+    AA --> TG_ANALYSIS["📊 Analysis via Telegram"]
 ```
 
 ### Think-First Routing
@@ -36,6 +39,7 @@ The Orchestrator classifies each incoming event before dispatching:
 | Telegram voice message | `voice` | Conversational (STT) → Tagging → Store |
 | Scheduled cron trigger | `scheduled` | Behavioral → Nudge |
 | User report request | `report` | Reporting → Dashboard |
+| User analysis request | `analysis` | Analytics → Telegram |
 | Edit callback button | `correction` | Direct DB update + learn |
 
 ---
@@ -247,3 +251,31 @@ All inter-agent data passes through the Orchestrator — agents never call each 
 | Low confidence parse | Send to user with "⚠️ Không chắc lắm, kiểm tra giúp?" + Edit button |
 | Duplicate transaction | Detect via amount + time window (5 min), ask user to confirm |
 | Unknown message format | Log raw text, respond "Không hiểu, bạn thử lại nhé?" |
+
+---
+
+### 6. Analytics Agent (The Analyst)
+
+| Property | Value |
+|---|---|
+| **File** | `src/agents/analytics.py` |
+| **LLM** | Gemini 2.5 Pro |
+| **Trigger** | User request via chat (e.g., "so sánh tuần này với tuần trước") |
+| **Input** | Transaction data from two periods + analysis parameters |
+| **Output** | Formatted comparative/trend analysis |
+
+**Responsibilities**:
+- Period-over-period comparison (week vs week, month vs month)
+- Spending trend detection across time
+- Category and merchant-level deep-dives
+- Anomaly identification and actionable insights
+
+**Analysis Types**:
+
+| Type | Trigger Example | Description |
+|---|---|---|
+| `compare` | "so sánh tuần này với tuần trước" | Side-by-side period comparison |
+| `trend` | "xu hướng chi tiêu tháng này" | Spending direction over time |
+| `deep_dive` | "phân tích chi tiêu ăn uống" | Category/merchant drill-down *(planned)* |
+
+See [FEATURE_ANALYTICS.md](./FEATURE_ANALYTICS.md) for full specification.

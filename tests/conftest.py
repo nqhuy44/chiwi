@@ -36,5 +36,6 @@ def mock_transaction_repo():
     repo = MagicMock()
     repo.insert = AsyncMock(return_value="mock_txn_id_123")
     repo.find_by_user = AsyncMock(return_value=[])
+    repo.find_by_merchant = AsyncMock(return_value=[])
     repo.update_category = AsyncMock(return_value=True)
     return repo

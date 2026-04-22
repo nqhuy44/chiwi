@@ -41,6 +41,7 @@ graph TD
         F["🏷️ Context & Tagging Agent<br/>(The Classifier)"]
         G["🧠 Behavioral Agent<br/>(The Psychologist)"]
         H["📊 Reporting Agent<br/>(The Strategist)"]
+        I2["🔬 Analytics Agent<br/>(The Analyst)"]
     end
 
     subgraph Data Layer
@@ -62,7 +63,9 @@ graph TD
     I --> G
     G --> K
     I --> H
+    I --> I2
     H --> L
+    I2 --> K
     C <--> J
 ```
 
@@ -85,7 +88,7 @@ The central brain that implements a **"Think-First"** routing pattern:
 4. Handles conversation state via Redis.
 
 ### 4. Agent Swarm
-Five specialized agents, each with a distinct system prompt and toolset. See [AGENTS.md](./AGENTS.md) for full documentation.
+Six specialized agents, each with a distinct system prompt and toolset. See [AGENTS.md](./AGENTS.md) for full documentation.
 
 ### 5. Data Layer
 - **MongoDB**: Primary persistent storage for transactions, user profiles, category mappings, and agent-generated metadata.
@@ -126,7 +129,8 @@ chiwi/
 │   │   ├── conversational.py
 │   │   ├── tagging.py
 │   │   ├── behavioral.py
-│   │   └── reporting.py
+│   │   ├── reporting.py
+│   │   └── analytics.py
 │   ├── api/              # FastAPI endpoints
 │   │   ├── routes/
 │   │   │   ├── webhook.py

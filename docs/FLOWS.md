@@ -192,3 +192,34 @@ flowchart TD
     L --> N["Weekly: Report generation (Monday 09:00)"]
     L --> O["Hourly: Budget check"]
 ```
+
+## 8. Analytics Flow (Comparison / Trend)
+
+```mermaid
+sequenceDiagram
+    participant User as 💬 User
+    participant TG as Telegram
+    participant GW as FastAPI Gateway
+    participant Orch as Orchestrator
+    participant CA as Conversational Agent
+    participant AA as Analytics Agent
+    participant Mongo as MongoDB
+
+    User->>TG: "so sánh chi tiêu tuần này với tuần trước"
+    TG->>GW: Telegram webhook update
+    GW->>Orch: Forward message
+    Orch->>CA: Route to Conversational Agent
+    CA->>CA: Gemini Pro: classify intent
+    Note over CA: intent: request_analysis<br/>analysis_type: compare<br/>period: this_week<br/>compare_period: last_week
+    CA-->>Orch: Structured analysis request
+    Orch->>Mongo: Query transactions (this week)
+    Orch->>Mongo: Query transactions (last week)
+    Orch->>AA: Route to Analytics Agent
+    AA->>AA: Pre-aggregate per category
+    AA->>AA: Gemini Pro: generate comparative insight
+    Note over AA: Total: +19% vs last week<br/>Food: +25%, Cafe: -33%<br/>Transport: +25%
+    AA-->>Orch: Formatted analysis report
+    Orch->>TG: Send analysis to user
+    TG->>User: Comparative analysis with trends
+```
+

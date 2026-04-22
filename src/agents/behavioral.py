@@ -8,16 +8,12 @@ Uses Gemini 2.5 Pro. Triggered by scheduled cron.
 
 import logging
 
+from src.agents.prompts import load_prompt
 from src.core.schemas import NudgeRequest, NudgeResult
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a behavioral finance analyst for a Vietnamese user.
-Given their spending data and personal profile, generate a short,
-personalized nudge message in Vietnamese. Use their hobbies and interests
-to create relatable analogies. Be encouraging, not judgmental.
-Max 2 sentences.
-"""
+SYSTEM_PROMPT = load_prompt("behavioral")
 
 MAX_NUDGES_PER_DAY = 2
 QUIET_HOURS = (22, 7)  # 22:00 - 07:00

@@ -39,3 +39,6 @@ htmlcov/
 
 # test reports
 reports/
+
+# AI Coding Assistants
+.claude/

@@ -8,6 +8,7 @@ using Gemini 2.5 Flash. Handles diverse Vietnamese bank formats.
 import logging
 from datetime import datetime
 
+from src.agents.prompts import load_prompt
 from src.api.middleware.pii_mask import mask_pii
 from src.core.config import settings
 from src.core.schemas import ParsedTransaction
@@ -15,27 +16,7 @@ from src.services.gemini import GeminiService
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """\
-You are a Vietnamese bank notification parser. Given a raw notification text,
-extract structured financial data. Output **valid JSON only**, no explanation.
-
-Required JSON fields:
-- "is_transaction": boolean — false if the text is NOT a financial transaction
-- "amount": number — transaction amount (0 if not a transaction)
-- "currency": string — default "VND"
-- "direction": "inflow" | "outflow"
-- "merchant_name": string | null — name of merchant/recipient
-- "transaction_time": string | null — ISO 8601 datetime if detectable, else null
-- "bank_name": string | null — name of the bank
-- "confidence": "high" | "medium" | "low"
-
-Vietnamese bank format hints:
-- "GD: -500,000VND" means outflow of 500,000 VND
-- "GD: +1,000,000VND" means inflow
-- "SD/Balance:" line shows remaining balance (ignore for amount)
-- "đ" is equivalent to "VND"
-- Common banks: Vietcombank, Techcombank, MB Bank, VPBank, ACB, TPBank, MoMo (e-wallet)
-"""
+SYSTEM_PROMPT = load_prompt("ingestion")
 
 
 class IngestionAgent:
