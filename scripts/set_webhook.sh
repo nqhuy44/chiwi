@@ -63,7 +63,7 @@ echo "Setting webhook to: ${FULL_URL}"
 RESULT=$(curl -s "${API}/setWebhook" \
     -d "url=${FULL_URL}" \
     -d "drop_pending_updates=true" \
-    -d "allowed_updates=[\"message\"]")
+    -d "allowed_updates=[\"message\",\"callback_query\"]")
 
 echo "$RESULT" | python3 -m json.tool
 

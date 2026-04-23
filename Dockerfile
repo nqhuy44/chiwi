@@ -33,5 +33,5 @@ USER chiwi
 
 EXPOSE 8000
 
-# Default command for API (can be overridden in docker-compose)
-CMD ["uvicorn", "src.main:app", "--host", "0.0.0.0", "--port", "8000"]
+# Honor $PORT (Cloud Run injects 8080); default to 8000 for local/docker-compose.
+CMD exec uvicorn src.main:app --host 0.0.0.0 --port ${PORT:-8000}

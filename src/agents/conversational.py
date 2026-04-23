@@ -7,12 +7,14 @@ Uses Gemini 2.5 Pro.
 """
 
 import logging
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, Field
 
 from src.agents.prompts import load_prompt
+from src.core.config import settings
 from src.services.gemini import GeminiService
 
 logger = logging.getLogger(__name__)
@@ -46,8 +48,8 @@ class ConversationalAgent:
     ) -> IntentResult:
         """Process a text message and determine intent."""
         logger.info("Processing message from chat_id=%s", chat_id)
-        
-        now_iso = datetime.now(UTC).isoformat()
+
+        now_iso = datetime.now(ZoneInfo(settings.business_timezone)).isoformat()
         prompt = SYSTEM_PROMPT_TEMPLATE.replace("{{CURRENT_TIMESTAMP}}", now_iso)
         
         user_msg = f"User message: {message}"

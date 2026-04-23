@@ -1,46 +1,71 @@
-"""Date range utilities for reporting and analytics."""
+"""Date range utilities for reporting, budgets, and analytics.
+
+All day-boundary math happens in the business timezone (Asia/Ho_Chi_Minh
+by default, configurable via settings.business_timezone). The returned
+datetimes are converted to UTC so they plug straight into Mongo queries
+where transaction_time is stored as UTC.
+"""
 
 from calendar import monthrange
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Tuple
+from zoneinfo import ZoneInfo
+
+from src.core.config import settings
+
+
+def _business_tz() -> ZoneInfo:
+    return ZoneInfo(settings.business_timezone)
+
+
+def _local_day_bounds(d: date) -> Tuple[datetime, datetime]:
+    """Return (00:00, 23:59:59.999999) for a local calendar day, in UTC."""
+    tz = _business_tz()
+    start_local = datetime.combine(d, time.min, tzinfo=tz)
+    end_local = datetime.combine(d, time.max, tzinfo=tz)
+    return start_local.astimezone(UTC), end_local.astimezone(UTC)
 
 
 def get_date_range(period: str) -> Tuple[datetime, datetime]:
-    """Calculate start and end datetime for a given period string."""
-    now = datetime.now(UTC)
-    today = now.date()
+    """Calculate (start_utc, end_utc) for a period label.
+
+    Returns (None, None) for unrecognized periods so callers can show a
+    friendly error instead of guessing.
+    """
+    tz = _business_tz()
+    now_local = datetime.now(tz)
+    today = now_local.date()
 
     if period == "today":
-        start = datetime.combine(today, time.min, tzinfo=UTC)
-        end = datetime.combine(today, time.max, tzinfo=UTC)
-    elif period == "this_week":
-        # Start of week (Monday)
-        start_of_week = today - timedelta(days=today.weekday())
-        start = datetime.combine(start_of_week, time.min, tzinfo=UTC)
-        end = now
-    elif period == "this_month":
-        # Start of month
-        start_of_month = today.replace(day=1)
-        start = datetime.combine(start_of_month, time.min, tzinfo=UTC)
-        end = now
-    elif period == "last_week":
-        # Previous full week (Monday to Sunday)
+        return _local_day_bounds(today)
+
+    if period == "this_week":
+        # Monday 00:00 local → now
+        monday = today - timedelta(days=today.weekday())
+        start_local = datetime.combine(monday, time.min, tzinfo=tz)
+        return start_local.astimezone(UTC), now_local.astimezone(UTC)
+
+    if period == "this_month":
+        first = today.replace(day=1)
+        start_local = datetime.combine(first, time.min, tzinfo=tz)
+        return start_local.astimezone(UTC), now_local.astimezone(UTC)
+
+    if period == "last_week":
         end_of_last_week = today - timedelta(days=today.weekday() + 1)
         start_of_last_week = end_of_last_week - timedelta(days=6)
-        start = datetime.combine(start_of_last_week, time.min, tzinfo=UTC)
-        end = datetime.combine(end_of_last_week, time.max, tzinfo=UTC)
-    elif period == "last_month":
-        # Previous full month
+        start, _ = _local_day_bounds(start_of_last_week)
+        _, end = _local_day_bounds(end_of_last_week)
+        return start, end
+
+    if period == "last_month":
         first_of_this_month = today.replace(day=1)
         end_of_last_month = first_of_this_month - timedelta(days=1)
         start_of_last_month = end_of_last_month.replace(day=1)
-        start = datetime.combine(start_of_last_month, time.min, tzinfo=UTC)
-        end = datetime.combine(end_of_last_month, time.max, tzinfo=UTC)
-    else:
-        # Return None for unrecognized periods to handle in orchestrator
-        return None, None
+        start, _ = _local_day_bounds(start_of_last_month)
+        _, end = _local_day_bounds(end_of_last_month)
+        return start, end
 
-    return start, end
+    return None, None
 
 
 def get_budget_window(
@@ -49,24 +74,23 @@ def get_budget_window(
     """Return (start, end) for a budget cycle containing today.
 
     Unlike get_date_range("this_week"/"this_month") which end at `now`,
-    budgets span the full period (Mon-Sun week or 1st-last of month).
+    budgets span the full local cycle.
     """
-    today = datetime.now(UTC).date()
+    tz = _business_tz()
+    today = datetime.now(tz).date()
 
     if budget_period == "weekly":
         monday = today - timedelta(days=today.weekday())
         sunday = monday + timedelta(days=6)
-        return (
-            datetime.combine(monday, time.min, tzinfo=UTC),
-            datetime.combine(sunday, time.max, tzinfo=UTC),
-        )
+        start, _ = _local_day_bounds(monday)
+        _, end = _local_day_bounds(sunday)
+        return start, end
 
     if budget_period == "monthly":
         _, last_day = monthrange(today.year, today.month)
-        return (
-            datetime.combine(today.replace(day=1), time.min, tzinfo=UTC),
-            datetime.combine(today.replace(day=last_day), time.max, tzinfo=UTC),
-        )
+        start, _ = _local_day_bounds(today.replace(day=1))
+        _, end = _local_day_bounds(today.replace(day=last_day))
+        return start, end
 
     return None, None
 
@@ -81,12 +105,11 @@ def get_comparison_ranges(
       - this_month -> last_month
       - today      -> yesterday
     """
-    current_start, current_end = get_date_range(period)
+    current = get_date_range(period)
 
     if compare_period:
-        comp_start, comp_end = get_date_range(compare_period)
+        comparison = get_date_range(compare_period)
     else:
-        # Auto-infer comparison period
         mapping = {
             "this_week": "last_week",
             "this_month": "last_month",
@@ -95,10 +118,10 @@ def get_comparison_ranges(
         inferred = mapping.get(period, "last_week")
 
         if inferred == "yesterday":
-            yesterday = datetime.now(UTC).date() - timedelta(days=1)
-            comp_start = datetime.combine(yesterday, time.min, tzinfo=UTC)
-            comp_end = datetime.combine(yesterday, time.max, tzinfo=UTC)
+            tz = _business_tz()
+            yesterday = datetime.now(tz).date() - timedelta(days=1)
+            comparison = _local_day_bounds(yesterday)
         else:
-            comp_start, comp_end = get_date_range(inferred)
+            comparison = get_date_range(inferred)
 
-    return (current_start, current_end), (comp_start, comp_end)
+    return current, comparison

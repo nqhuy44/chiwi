@@ -29,6 +29,10 @@ class Settings(BaseSettings):
     # Security
     pii_mask_enabled: bool = True
 
+    # Business timezone — used for day-boundary math (reports, budgets,
+    # "hôm nay"). Storage stays in UTC.
+    business_timezone: str = "Asia/Ho_Chi_Minh"
+
     # Categories — path to a JSON file with the list of spending categories
     # used by the Tagging Agent and seeded into the categories collection.
     # Empty → use the bundled default at <project>/config/categories.json.
