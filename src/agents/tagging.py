@@ -8,6 +8,7 @@ Uses Gemini 2.5 Flash.
 
 import json
 import logging
+import statistics
 from collections import Counter
 
 from src.agents.prompts import load_prompt
@@ -22,6 +23,7 @@ logger = logging.getLogger(__name__)
 FALLBACK_CATEGORY = "Khác"
 DEFAULT_HISTORY_LOOKBACK = 5
 MAJORITY_MIN_COUNT = 2
+AMOUNT_OUTLIER_RATIO = 3.0  # current amount vs history median
 
 
 def _render_prompt() -> str:
@@ -39,7 +41,10 @@ class TaggingAgent:
     The agent has three layers of memory, tried in order:
     1. Redis merchant cache (hot, per-merchant).
     2. MongoDB historical memory — previous transactions for this
-       user + merchant. A strong majority short-circuits the LLM.
+       user + merchant. A strong majority short-circuits the LLM,
+       but only when the new transaction is *in-pattern* (same
+       direction, amount within AMOUNT_OUTLIER_RATIO× history median).
+       User-corrected history entries outweigh auto-tagged ones.
     3. Gemini Flash, called with the history as context so it can
        keep classifications consistent across similar transactions.
     """
@@ -73,7 +78,7 @@ class TaggingAgent:
 
         # Layer 2 — MongoDB historical memory
         history = await self._load_history(user_id, merchant)
-        majority = self._majority_category(history)
+        majority = self._majority_category(history, transaction)
         if majority is not None:
             logger.info(
                 "Historical majority for %s -> %s (n=%d)",
@@ -112,24 +117,64 @@ class TaggingAgent:
             limit=self._history_lookback,
         )
 
-    @staticmethod
-    def _majority_category(history: list[dict]) -> str | None:
-        """Return the winning category if it dominates the history.
+    @classmethod
+    def _majority_category(
+        cls, history: list[dict], transaction: ParsedTransaction
+    ) -> str | None:
+        """Return the winning category if history dominates AND the new
+        transaction is in-pattern.
 
-        Requires at least MAJORITY_MIN_COUNT matches AND strict majority.
-        The fallback category is ignored so we don't lock in "Khác".
+        Bails out when:
+        - history has no usable categories
+        - the new transaction's direction differs from the history majority
+        - the new transaction's amount is an outlier vs history median
+        - no category meets MAJORITY_MIN_COUNT + strict majority
         """
+        if not history:
+            return None
+
+        # Pattern check: direction must match history's dominant direction.
+        dir_counts = Counter(
+            h.get("direction") for h in history if h.get("direction")
+        )
+        if dir_counts and transaction.direction:
+            top_dir, _ = dir_counts.most_common(1)[0]
+            if transaction.direction != top_dir:
+                return None
+
+        # Pattern check: amount within AMOUNT_OUTLIER_RATIO× history median.
+        amounts = [
+            h.get("amount") for h in history if isinstance(h.get("amount"), (int, float))
+        ]
+        if amounts and transaction.amount:
+            median = statistics.median(amounts)
+            if median > 0 and (
+                transaction.amount > median * AMOUNT_OUTLIER_RATIO
+                or transaction.amount < median / AMOUNT_OUTLIER_RATIO
+            ):
+                return None
+
+        # Prefer user-corrected entries if any exist — user overrides win.
+        corrected = [h for h in history if h.get("user_corrected")]
+        pool = corrected if corrected else history
+
         counts = Counter(
             txn.get("category_id")
-            for txn in history
+            for txn in pool
             if txn.get("category_id") and txn.get("category_id") != FALLBACK_CATEGORY
         )
         if not counts:
             return None
+
         top, top_count = counts.most_common(1)[0]
+
+        # Single user correction is enough to win.
+        if corrected:
+            return top
+
         if top_count < MAJORITY_MIN_COUNT:
             return None
-        if top_count * 2 <= len(history):  # not a strict majority
+        if top_count * 2 <= len(pool):  # not a strict majority
             return None
         return top
 
@@ -158,5 +203,6 @@ class TaggingAgent:
             for txn in history:
                 cat = txn.get("category_id") or "?"
                 tags = txn.get("tags") or []
-                lines.append(f"- category: {cat}, tags: {tags}")
+                corrected = " (user-corrected)" if txn.get("user_corrected") else ""
+                lines.append(f"- category: {cat}{corrected}, tags: {tags}")
         return "\n".join(lines)

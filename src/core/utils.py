@@ -1,5 +1,6 @@
 """Date range utilities for reporting and analytics."""
 
+from calendar import monthrange
 from datetime import UTC, datetime, time, timedelta
 from typing import Tuple
 
@@ -40,6 +41,34 @@ def get_date_range(period: str) -> Tuple[datetime, datetime]:
         return None, None
 
     return start, end
+
+
+def get_budget_window(
+    budget_period: str,
+) -> Tuple[datetime | None, datetime | None]:
+    """Return (start, end) for a budget cycle containing today.
+
+    Unlike get_date_range("this_week"/"this_month") which end at `now`,
+    budgets span the full period (Mon-Sun week or 1st-last of month).
+    """
+    today = datetime.now(UTC).date()
+
+    if budget_period == "weekly":
+        monday = today - timedelta(days=today.weekday())
+        sunday = monday + timedelta(days=6)
+        return (
+            datetime.combine(monday, time.min, tzinfo=UTC),
+            datetime.combine(sunday, time.max, tzinfo=UTC),
+        )
+
+    if budget_period == "monthly":
+        _, last_day = monthrange(today.year, today.month)
+        return (
+            datetime.combine(today.replace(day=1), time.min, tzinfo=UTC),
+            datetime.combine(today.replace(day=last_day), time.max, tzinfo=UTC),
+        )
+
+    return None, None
 
 
 def get_comparison_ranges(

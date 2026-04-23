@@ -18,6 +18,11 @@ class TransactionRepository:
         result = await self.collection.insert_one(transaction.model_dump())
         return str(result.inserted_id)
 
+    async def find_by_id(self, transaction_id: str) -> dict | None:
+        from bson import ObjectId
+
+        return await self.collection.find_one({"_id": ObjectId(transaction_id)})
+
     async def find_by_user(
         self,
         user_id: str,

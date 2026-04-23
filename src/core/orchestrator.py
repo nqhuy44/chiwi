@@ -14,7 +14,13 @@ from src.agents.ingestion import IngestionAgent
 from src.agents.reporting import ReportingAgent
 from src.agents.tagging import TaggingAgent
 from src.core.schemas import AnalysisRequest, ParsedTransaction, ReportRequest
+from src.db.models.budget import BudgetDocument
+from src.db.models.correction import CorrectionDocument
+from src.db.models.goal import GoalDocument
 from src.db.models.transaction import TransactionDocument
+from src.db.repositories.budget_repo import BudgetRepository
+from src.db.repositories.correction_repo import CorrectionRepository
+from src.db.repositories.goal_repo import GoalRepository
 from src.db.repositories.transaction_repo import TransactionRepository
 from src.services.gemini import GeminiService
 from src.services.redis_client import RedisClient
@@ -34,10 +40,16 @@ class Orchestrator:
         gemini: GeminiService,
         redis: RedisClient,
         transaction_repo: TransactionRepository,
+        budget_repo: BudgetRepository,
+        goal_repo: GoalRepository,
+        correction_repo: CorrectionRepository,
     ) -> None:
         self._gemini = gemini
         self._redis = redis
         self._transaction_repo = transaction_repo
+        self._budget_repo = budget_repo
+        self._goal_repo = goal_repo
+        self._correction_repo = correction_repo
 
         # Agents (initialized with shared services)
         self._ingestion = IngestionAgent(gemini)
@@ -151,7 +163,7 @@ class Orchestrator:
 
         if intent_result.intent == "request_report":
             return await self._handle_report({
-                "user_id": user_id, 
+                "user_id": user_id,
                 "period": intent_result.payload.get("period", "today")
             })
 
@@ -162,6 +174,31 @@ class Orchestrator:
                 "period": intent_result.payload.get("period", "this_week"),
                 "compare_period": intent_result.payload.get("compare_period"),
                 "category_filter": intent_result.payload.get("category_filter"),
+            })
+
+        if intent_result.intent == "ask_balance":
+            return await self._handle_ask_balance({
+                "user_id": user_id,
+                "period": intent_result.payload.get("period", "this_month"),
+            })
+
+        if intent_result.intent == "ask_category":
+            return await self._handle_ask_category({"user_id": user_id})
+
+        if intent_result.intent == "set_budget":
+            return await self._handle_set_budget({
+                "user_id": user_id,
+                "category_name": intent_result.payload.get("category_name"),
+                "limit_amount": intent_result.payload.get("limit_amount"),
+                "budget_period": intent_result.payload.get("budget_period", "monthly"),
+            })
+
+        if intent_result.intent == "set_goal":
+            return await self._handle_set_goal({
+                "user_id": user_id,
+                "goal_name": intent_result.payload.get("goal_name"),
+                "target_amount": intent_result.payload.get("target_amount"),
+                "deadline": intent_result.payload.get("deadline"),
             })
 
         if intent_result.intent != "log_transaction":
@@ -324,7 +361,240 @@ class Orchestrator:
             "response_text": result["report_text"],
         }
 
+    async def _handle_ask_balance(self, payload: dict) -> dict:
+        """Compute net inflow/outflow for a period and format a Vietnamese reply."""
+        from src.core.utils import get_date_range
+
+        user_id = payload.get("user_id")
+        period_str = payload.get("period", "this_month")
+
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+
+        start_date, end_date = get_date_range(period_str)
+        if not start_date:
+            return {
+                "status": "error",
+                "response_text": (
+                    f"Mai chưa hỗ trợ mốc thời gian '{period_str}' đâu ạ. "
+                    "Bạn thử 'hôm nay', 'tuần này', 'tháng này' nhé!"
+                ),
+            }
+
+        transactions = await self._transaction_repo.find_by_user(
+            user_id=user_id, start_date=start_date, end_date=end_date, limit=500
+        )
+
+        total_inflow = sum(
+            t.get("amount", 0) for t in transactions if t.get("direction") == "inflow"
+        )
+        total_outflow = sum(
+            t.get("amount", 0) for t in transactions if t.get("direction") == "outflow"
+        )
+        net = total_inflow - total_outflow
+
+        period_labels = {
+            "today": "hôm nay",
+            "this_week": "tuần này",
+            "this_month": "tháng này",
+            "last_week": "tuần trước",
+            "last_month": "tháng trước",
+        }
+        period_label = period_labels.get(period_str, period_str)
+
+        if not transactions:
+            response = (
+                f"Chưa có giao dịch nào {period_label} cả. "
+                "Bạn cứ nhắn Mai khi chi/thu nhé!"
+            )
+        else:
+            response = (
+                f"Cân đối {period_label}:\n"
+                f"  Thu: <b>+{total_inflow:,.0f} VND</b>\n"
+                f"  Chi: <b>-{total_outflow:,.0f} VND</b>\n"
+                f"  Còn lại: <b>{net:,.0f} VND</b>"
+            )
+
+        return {"status": "success", "response_text": response}
+
+    async def _handle_ask_category(self, payload: dict) -> dict:
+        """List the configured spending categories in Vietnamese."""
+        from src.core.categories import load_categories
+
+        categories = load_categories()
+        lines = [
+            f"{cat.icon_emoji} {cat.name}" for cat in categories if not cat.parent_category
+        ]
+        response = (
+            "Các danh mục Mai đang phân loại:\n" + "\n".join(lines)
+            if lines
+            else "Hiện chưa có danh mục nào được cấu hình."
+        )
+        return {"status": "success", "response_text": response}
+
+    async def _handle_set_budget(self, payload: dict) -> dict:
+        """Create a budget for a category + period."""
+        from src.core.utils import get_budget_window
+
+        user_id = payload.get("user_id")
+        category_name = payload.get("category_name")
+        limit_amount = payload.get("limit_amount")
+        budget_period = payload.get("budget_period", "monthly")
+
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+
+        if not category_name or not limit_amount:
+            return {
+                "status": "error",
+                "response_text": (
+                    "Mai cần biết danh mục và số tiền để đặt ngân sách nha. "
+                    "Ví dụ: <i>'đặt ngân sách ăn uống 2 triệu tháng này'</i>."
+                ),
+            }
+
+        start_date, end_date = get_budget_window(budget_period)
+        if not start_date:
+            return {
+                "status": "error",
+                "response_text": (
+                    f"Mai chưa hỗ trợ chu kỳ ngân sách '{budget_period}' đâu ạ. "
+                    "Bạn thử 'tuần' (weekly) hoặc 'tháng' (monthly) nhé!"
+                ),
+            }
+
+        budget = BudgetDocument(
+            user_id=user_id,
+            category_id=category_name,
+            limit_amount=float(limit_amount),
+            period=budget_period,
+            start_date=start_date,
+            end_date=end_date,
+        )
+        budget_id = await self._budget_repo.insert(budget)
+        logger.info("Budget stored: %s", budget_id)
+
+        period_label = "tuần này" if budget_period == "weekly" else "tháng này"
+        response = (
+            f"Đã đặt ngân sách <b>{float(limit_amount):,.0f} VND</b> "
+            f"cho <b>{category_name}</b> trong {period_label} nhé!"
+        )
+        return {
+            "status": "success",
+            "budget_id": budget_id,
+            "response_text": response,
+        }
+
+    async def _handle_set_goal(self, payload: dict) -> dict:
+        """Create a savings / financial goal."""
+        user_id = payload.get("user_id")
+        goal_name = payload.get("goal_name")
+        target_amount = payload.get("target_amount")
+        deadline_raw = payload.get("deadline")
+
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+
+        if not goal_name or not target_amount:
+            return {
+                "status": "error",
+                "response_text": (
+                    "Mai cần tên mục tiêu và số tiền nha. "
+                    "Ví dụ: <i>'đặt mục tiêu tiết kiệm 20 triệu mua laptop'</i>."
+                ),
+            }
+
+        deadline: datetime | None = None
+        if deadline_raw:
+            try:
+                deadline = datetime.fromisoformat(deadline_raw)
+            except (ValueError, TypeError):
+                deadline = None
+
+        goal = GoalDocument(
+            user_id=user_id,
+            name=goal_name,
+            target_amount=float(target_amount),
+            deadline=deadline,
+        )
+        goal_id = await self._goal_repo.insert(goal)
+        logger.info("Goal stored: %s", goal_id)
+
+        deadline_suffix = (
+            f" trước <b>{deadline.strftime('%d/%m/%Y')}</b>" if deadline else ""
+        )
+        response = (
+            f"Đã tạo mục tiêu <b>{goal_name}</b> với số tiền "
+            f"<b>{float(target_amount):,.0f} VND</b>{deadline_suffix} nhé! "
+            "Cố lên anh/chị ơi 💪"
+        )
+        return {
+            "status": "success",
+            "goal_id": goal_id,
+            "response_text": response,
+        }
+
     async def _handle_correction(self, payload: dict) -> dict:
-        """Direct DB update + learn from correction."""
-        # TODO: Implement correction pipeline (Phase 3)
-        return {"status": "not_implemented"}
+        """Apply a user correction: update the transaction, invalidate
+        the merchant cache, and record the override so tagging learns.
+        """
+        user_id = payload.get("user_id")
+        transaction_id = payload.get("transaction_id")
+        new_category = payload.get("new_category")
+
+        if not user_id or not transaction_id or not new_category:
+            return {
+                "status": "error",
+                "response_text": "Thiếu thông tin để cập nhật giao dịch.",
+            }
+
+        original = await self._transaction_repo.find_by_id(transaction_id)
+        if not original:
+            return {
+                "status": "error",
+                "response_text": "Không tìm thấy giao dịch để sửa.",
+            }
+
+        old_category = original.get("category_id")
+        merchant_name = original.get("merchant_name")
+
+        updated = await self._transaction_repo.update_category(
+            transaction_id, new_category
+        )
+        if not updated:
+            return {
+                "status": "error",
+                "response_text": "Không cập nhật được giao dịch.",
+            }
+
+        # Invalidate Redis so the next enrich re-evaluates with the correction
+        # sitting in Mongo history (user_corrected=True).
+        if merchant_name:
+            await self._redis.delete_merchant_cache(merchant_name)
+
+        # Record the correction for audit + future high-weight overrides.
+        await self._correction_repo.insert(
+            CorrectionDocument(
+                user_id=user_id,
+                transaction_id=transaction_id,
+                merchant_name=merchant_name,
+                old_category=old_category,
+                new_category=new_category,
+            )
+        )
+        logger.info(
+            "Correction applied: txn=%s merchant=%s %s -> %s",
+            transaction_id,
+            merchant_name,
+            old_category,
+            new_category,
+        )
+
+        return {
+            "status": "success",
+            "transaction_id": transaction_id,
+            "response_text": (
+                f"Đã cập nhật danh mục thành <b>{new_category}</b> nhé! "
+                "Mai sẽ nhớ cho lần sau."
+            ),
+        }

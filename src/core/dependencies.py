@@ -11,6 +11,9 @@ from dataclasses import dataclass, field
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from src.core.config import settings
+from src.db.repositories.budget_repo import BudgetRepository
+from src.db.repositories.correction_repo import CorrectionRepository
+from src.db.repositories.goal_repo import GoalRepository
 from src.db.repositories.transaction_repo import TransactionRepository
 from src.db.repositories.user_repo import UserRepository
 from src.services.gemini import GeminiService
@@ -36,6 +39,9 @@ class AppContainer:
     # Repositories (initialized after DB connect)
     transaction_repo: TransactionRepository | None = None
     user_repo: UserRepository | None = None
+    budget_repo: BudgetRepository | None = None
+    goal_repo: GoalRepository | None = None
+    correction_repo: CorrectionRepository | None = None
 
     # Orchestrator (initialized after all services are ready)
     _orchestrator: object | None = None
@@ -54,6 +60,9 @@ class AppContainer:
         # Repositories
         self.transaction_repo = TransactionRepository(self.db)
         self.user_repo = UserRepository(self.db)
+        self.budget_repo = BudgetRepository(self.db)
+        self.goal_repo = GoalRepository(self.db)
+        self.correction_repo = CorrectionRepository(self.db)
 
         # Redis
         await self.redis.connect()
@@ -68,6 +77,9 @@ class AppContainer:
             gemini=self.gemini,
             redis=self.redis,
             transaction_repo=self.transaction_repo,
+            budget_repo=self.budget_repo,
+            goal_repo=self.goal_repo,
+            correction_repo=self.correction_repo,
         )
         logger.info("All services initialized")
 

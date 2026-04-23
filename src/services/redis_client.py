@@ -72,6 +72,12 @@ class RedisClient:
             self._key("merchant_cache", merchant), category, ex=ttl
         )
 
+    async def delete_merchant_cache(self, merchant: str) -> None:
+        """Invalidate a merchant's cached category — called on user corrections."""
+        if not self._redis:
+            return
+        await self._redis.delete(self._key("merchant_cache", merchant))
+
     async def increment_rate_limit(
         self, user_id: str, ttl: int = 60
     ) -> int:
