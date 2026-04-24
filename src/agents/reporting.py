@@ -10,6 +10,7 @@ import logging
 
 from src.agents.prompts import load_prompt
 from src.core.schemas import ReportRequest
+from src.core.toon import to_toon
 from src.services.gemini import GeminiService
 
 logger = logging.getLogger(__name__)
@@ -36,24 +37,27 @@ class ReportingAgent:
         total_outflow = sum(t.get("amount", 0) for t in transactions if t.get("direction") == "outflow")
         total_inflow = sum(t.get("amount", 0) for t in transactions if t.get("direction") == "inflow")
 
-        # Format transactions for LLM context
-        tx_lines = []
-        for t in transactions:
-            direction = "-" if t.get("direction") == "outflow" else "+"
-            cat = t.get("category_id", "Khác")
-            merchant = t.get("merchant_name", "")
-            amt = t.get("amount", 0)
-            tx_lines.append(f"{direction}{amt:,.0f} VND - {cat} ({merchant})")
-
-        tx_context = "\n".join(tx_lines) if tx_lines else "Không có giao dịch nào."
+        payload: dict = {
+            "report_type": request.report_type,
+            "period": request.period,
+            "total_inflow": round(total_inflow),
+            "total_outflow": round(total_outflow),
+        }
+        if transactions:
+            payload["transactions"] = [
+                {
+                    "dir": t.get("direction", "outflow"),
+                    "amount": round(t.get("amount", 0)),
+                    "cat": t.get("category_id", "Khác"),
+                    "merchant": t.get("merchant_name", "") or "",
+                }
+                for t in transactions
+            ]
 
         user_msg = (
-            f"Báo cáo loại: {request.report_type}\n"
-            f"Thời gian: {request.period}\n"
-            f"Tổng thu: {total_inflow:,.0f} VND\n"
-            f"Tổng chi: {total_outflow:,.0f} VND\n\n"
-            f"Chi tiết giao dịch:\n{tx_context}\n\n"
-            "Hãy viết một báo cáo ngắn gọn, thân thiện bằng tiếng Việt. Nếu không có giao dịch, hãy động viên nhẹ nhàng."
+            to_toon(payload)
+            + "\n\nHãy viết một báo cáo ngắn gọn, thân thiện bằng tiếng Việt."
+            " Nếu không có giao dịch, hãy động viên nhẹ nhàng."
         )
 
         result = await self._gemini.call_flash(SYSTEM_PROMPT, user_msg)

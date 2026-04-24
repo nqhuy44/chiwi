@@ -14,6 +14,7 @@ from collections import Counter
 from src.agents.prompts import load_prompt
 from src.core.categories import category_names
 from src.core.schemas import ParsedTransaction
+from src.core.toon import to_toon
 from src.db.repositories.transaction_repo import TransactionRepository
 from src.services.gemini import GeminiService
 from src.services.redis_client import RedisClient
@@ -191,18 +192,20 @@ class TaggingAgent:
     def _build_user_msg(
         transaction: ParsedTransaction, history: list[dict]
     ) -> str:
-        lines = [
-            f"Merchant: {transaction.merchant_name or 'Unknown'}",
-            f"Amount: {transaction.amount} {transaction.currency}",
-            f"Direction: {transaction.direction}",
-            f"Bank: {transaction.bank_name or 'Unknown'}",
-        ]
+        payload: dict = {
+            "merchant": transaction.merchant_name or "Unknown",
+            "amount": transaction.amount,
+            "currency": transaction.currency,
+            "direction": transaction.direction,
+            "bank": transaction.bank_name or "Unknown",
+        }
         if history:
-            lines.append("")
-            lines.append("Previous classifications for this merchant:")
-            for txn in history:
-                cat = txn.get("category_id") or "?"
-                tags = txn.get("tags") or []
-                corrected = " (user-corrected)" if txn.get("user_corrected") else ""
-                lines.append(f"- category: {cat}{corrected}, tags: {tags}")
-        return "\n".join(lines)
+            payload["history"] = [
+                {
+                    "category": txn.get("category_id") or "?",
+                    "tags": ",".join(txn.get("tags") or []),
+                    "corrected": bool(txn.get("user_corrected")),
+                }
+                for txn in history
+            ]
+        return to_toon(payload)
