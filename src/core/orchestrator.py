@@ -9,21 +9,28 @@ from datetime import UTC, datetime
 from typing import Literal
 
 from src.agents.analytics import AnalyticsAgent
+from src.agents.behavioral import BehavioralAgent
 from src.agents.conversational import ConversationalAgent
 from src.agents.ingestion import IngestionAgent
 from src.agents.reporting import ReportingAgent
 from src.agents.tagging import TaggingAgent
-from src.core.schemas import AnalysisRequest, ParsedTransaction, ReportRequest
-from src.db.models.budget import BudgetDocument
+from src.core.profiles import get_profile
+from src.core.schemas import (AnalysisRequest, NudgeRequest, ParsedTransaction,
+                              ReportRequest)
+from src.db.models.budget import BudgetDocument, BudgetEventDocument
 from src.db.models.correction import CorrectionDocument
 from src.db.models.goal import GoalDocument
+from src.db.models.subscription import SubscriptionDocument
 from src.db.models.transaction import TransactionDocument
-from src.db.repositories.budget_repo import BudgetRepository
+from src.db.repositories.budget_repo import BudgetEventRepository, BudgetRepository, effective_limit
 from src.db.repositories.correction_repo import CorrectionRepository
 from src.db.repositories.goal_repo import GoalRepository
+from src.db.repositories.nudge_repo import NudgeRepository
+from src.db.repositories.subscription_repo import SubscriptionRepository
 from src.db.repositories.transaction_repo import TransactionRepository
 from src.services.gemini import GeminiService
 from src.services.redis_client import RedisClient
+from src.services.telegram import TelegramService
 
 logger = logging.getLogger(__name__)
 
@@ -39,32 +46,45 @@ class Orchestrator:
         self,
         gemini: GeminiService,
         redis: RedisClient,
+        telegram: TelegramService,
         transaction_repo: TransactionRepository,
         budget_repo: BudgetRepository,
+        budget_event_repo: BudgetEventRepository,
         goal_repo: GoalRepository,
         correction_repo: CorrectionRepository,
+        nudge_repo: NudgeRepository,
+        subscription_repo: SubscriptionRepository,
     ) -> None:
         self._gemini = gemini
         self._redis = redis
+        self._telegram = telegram
         self._transaction_repo = transaction_repo
         self._budget_repo = budget_repo
+        self._budget_event_repo = budget_event_repo
         self._goal_repo = goal_repo
         self._correction_repo = correction_repo
+        self._nudge_repo = nudge_repo
+        self._subscription_repo = subscription_repo
 
         # Agents (initialized with shared services)
         self._ingestion = IngestionAgent(gemini)
         self._conversational = ConversationalAgent(gemini)
         self._reporting = ReportingAgent(gemini)
         self._analytics = AnalyticsAgent(gemini)
-        self._tagging = TaggingAgent(
-            gemini, redis, transaction_repo=transaction_repo
+        self._tagging = TaggingAgent(gemini, redis, transaction_repo=transaction_repo)
+        self._behavioral = BehavioralAgent(
+            gemini=gemini, telegram=telegram, nudge_repo=nudge_repo
         )
+
+    def _get_user_chat_id(self, user_id: str) -> str:
+        """Return the Telegram chat_id for a user, sourced from their profile."""
+        return get_profile(user_id).chat_id
 
     async def classify_event(self, event: dict) -> EventType:
         """Classify an incoming event to determine the agent pipeline."""
         source = event.get("source", "")
 
-        if source in ("macrodroid", "tasker", "ios_shortcut"):
+        if source == "android":
             return "notification"
         if source == "telegram_voice":
             return "voice"
@@ -99,27 +119,28 @@ class Orchestrator:
                 return {"status": "unknown_event"}
 
     async def _handle_notification(self, payload: dict) -> dict:
-        """Pipeline: Ingestion Agent -> Tagging Agent -> Store."""
-        raw_text = payload.get("notification_text", "")
+        """Pipeline: Ingestion Agent → Tagging Agent → Store.
+
+        Called when the Android app forwards a raw bank notification.
+        All parsing is done server-side so mobile releases are not needed
+        to fix parsing bugs.
+        """
+        raw_text = payload.get("raw_text", "")
+        bank_hint = payload.get("bank_hint")
         user_id = payload.get("user_id", "")
+        chat_id = payload.get("chat_id", "")
 
         if not raw_text:
             return {"status": "empty_notification"}
 
-        # Step 1: Parse with Ingestion Agent
-        parsed: ParsedTransaction = await self._ingestion.parse(raw_text)
+        parsed: ParsedTransaction = await self._ingestion.parse(raw_text, bank_hint)
 
         if not parsed.is_transaction:
             logger.info("Non-transaction notification, skipping")
             return {"status": "not_transaction", "parsed": parsed.model_dump()}
 
-        # Step 2: Enrich with Tagging Agent
-        tags_result = await self._tagging.enrich(
-            transaction=parsed,
-            user_id=user_id,
-        )
+        tags_result = await self._tagging.enrich(transaction=parsed, user_id=user_id)
 
-        # Step 3: Store in MongoDB
         txn_doc = TransactionDocument(
             user_id=user_id,
             source="notification",
@@ -132,14 +153,17 @@ class Orchestrator:
             tags=tags_result.get("tags", []),
             transaction_time=parsed.transaction_time or datetime.now(UTC),
             agent_confidence=parsed.confidence,
-            ai_metadata={
-                "bank_name": parsed.bank_name,
-                "tagging_result": tags_result,
-            },
+            ai_metadata={"bank_name": parsed.bank_name, "tagging_result": tags_result},
         )
 
         txn_id = await self._transaction_repo.insert(txn_doc)
-        logger.info("Transaction stored: %s", txn_id)
+        logger.info("Transaction stored from Android notification: %s", txn_id)
+
+        if chat_id and parsed.merchant_name:
+            await self._check_subscription_match(
+                user_id, parsed.merchant_name, parsed.amount or 0.0,
+                parsed.transaction_time or datetime.now(UTC), chat_id, txn_id,
+            )
 
         return {
             "status": "stored",
@@ -156,50 +180,156 @@ class Orchestrator:
         if not raw_text:
             return {"status": "empty_message"}
 
+        user_tz = get_profile(user_id).timezone
+
         # Step 1: Parse intent
         intent_result = await self._conversational.process_message(
-            message=raw_text, chat_id=chat_id
+            message=raw_text, chat_id=chat_id, user_timezone=user_tz
         )
 
         if intent_result.intent == "request_report":
-            return await self._handle_report({
-                "user_id": user_id,
-                "period": intent_result.payload.get("period", "today")
-            })
+            return await self._handle_report(
+                {
+                    "user_id": user_id,
+                    "period": intent_result.payload.get("period", "today"),
+                    "user_timezone": user_tz,
+                }
+            )
 
         if intent_result.intent == "request_analysis":
-            return await self._handle_analysis({
-                "user_id": user_id,
-                "analysis_type": intent_result.payload.get("analysis_type", "compare"),
-                "period": intent_result.payload.get("period", "this_week"),
-                "compare_period": intent_result.payload.get("compare_period"),
-                "category_filter": intent_result.payload.get("category_filter"),
-            })
+            return await self._handle_analysis(
+                {
+                    "user_id": user_id,
+                    "analysis_type": intent_result.payload.get(
+                        "analysis_type", "compare"
+                    ),
+                    "period": intent_result.payload.get("period", "this_week"),
+                    "compare_period": intent_result.payload.get("compare_period"),
+                    "category_filter": intent_result.payload.get("category_filter"),
+                    "user_timezone": user_tz,
+                }
+            )
+
+        if intent_result.intent == "ask_spending_vs_avg":
+            return await self._handle_ask_spending_vs_avg(
+                {
+                    "user_id": user_id,
+                    "period": intent_result.payload.get("period", "this_week"),
+                }
+            )
 
         if intent_result.intent == "ask_balance":
-            return await self._handle_ask_balance({
-                "user_id": user_id,
-                "period": intent_result.payload.get("period", "this_month"),
-            })
+            return await self._handle_ask_balance(
+                {
+                    "user_id": user_id,
+                    "period": intent_result.payload.get("period", "this_month"),
+                    "user_timezone": user_tz,
+                }
+            )
 
         if intent_result.intent == "ask_category":
             return await self._handle_ask_category({"user_id": user_id})
 
         if intent_result.intent == "set_budget":
-            return await self._handle_set_budget({
-                "user_id": user_id,
-                "category_name": intent_result.payload.get("category_name"),
-                "limit_amount": intent_result.payload.get("limit_amount"),
-                "budget_period": intent_result.payload.get("budget_period", "monthly"),
-            })
+            return await self._handle_set_budget(
+                {
+                    "user_id": user_id,
+                    "category_name": intent_result.payload.get("category_name"),
+                    "limit_amount": intent_result.payload.get("limit_amount"),
+                    "budget_period": intent_result.payload.get("budget_period", "monthly"),
+                    "user_timezone": user_tz,
+                }
+            )
+
+        if intent_result.intent == "ask_budget":
+            return await self._handle_ask_budget({"user_id": user_id})
+
+        if intent_result.intent == "update_budget":
+            return await self._handle_update_budget(
+                {
+                    "user_id": user_id,
+                    "category_name": intent_result.payload.get("category_name"),
+                    "new_limit": intent_result.payload.get("new_limit"),
+                }
+            )
+
+        if intent_result.intent == "temp_increase_budget":
+            return await self._handle_temp_increase_budget(
+                {
+                    "user_id": user_id,
+                    "category_name": intent_result.payload.get("category_name"),
+                    "temp_limit": intent_result.payload.get("temp_limit"),
+                    "reason": intent_result.payload.get("budget_reason"),
+                }
+            )
+
+        if intent_result.intent == "silence_budget":
+            return await self._handle_silence_budget(
+                {
+                    "user_id": user_id,
+                    "category_name": intent_result.payload.get("category_name"),
+                }
+            )
+
+        if intent_result.intent == "disable_budget":
+            return await self._handle_disable_budget(
+                {
+                    "user_id": user_id,
+                    "category_name": intent_result.payload.get("category_name"),
+                }
+            )
 
         if intent_result.intent == "set_goal":
-            return await self._handle_set_goal({
-                "user_id": user_id,
-                "goal_name": intent_result.payload.get("goal_name"),
-                "target_amount": intent_result.payload.get("target_amount"),
-                "deadline": intent_result.payload.get("deadline"),
-            })
+            return await self._handle_set_goal(
+                {
+                    "user_id": user_id,
+                    "goal_name": intent_result.payload.get("goal_name"),
+                    "target_amount": intent_result.payload.get("target_amount"),
+                    "deadline": intent_result.payload.get("deadline"),
+                }
+            )
+
+        if intent_result.intent == "set_subscription":
+            return await self._handle_set_subscription(
+                {
+                    "user_id": user_id,
+                    "name": intent_result.payload.get("subscription_name"),
+                    "merchant_name": intent_result.payload.get("subscription_merchant"),
+                    "amount": intent_result.payload.get("subscription_amount"),
+                    "period": intent_result.payload.get("subscription_period", "monthly"),
+                    "next_charge_date": intent_result.payload.get("subscription_next_date"),
+                }
+            )
+
+        if intent_result.intent == "list_subscriptions":
+            return await self._handle_list_subscriptions({"user_id": user_id})
+
+        if intent_result.intent == "mark_subscription_paid":
+            return await self._handle_mark_subscription_paid(
+                {
+                    "user_id": user_id,
+                    "merchant_name": intent_result.payload.get("subscription_merchant"),
+                }
+            )
+
+        if intent_result.intent == "cancel_subscription":
+            return await self._handle_cancel_subscription(
+                {
+                    "user_id": user_id,
+                    "merchant_name": intent_result.payload.get("subscription_merchant"),
+                }
+            )
+
+        if intent_result.intent == "update_subscription":
+            return await self._handle_update_subscription(
+                {
+                    "user_id": user_id,
+                    "merchant_name": intent_result.payload.get("subscription_merchant"),
+                    "new_amount": intent_result.payload.get("subscription_new_amount"),
+                    "new_period": intent_result.payload.get("subscription_new_period"),
+                    "new_next_date": intent_result.payload.get("subscription_new_date"),
+                }
+            )
 
         if intent_result.intent != "log_transaction":
             return {
@@ -212,7 +342,11 @@ class Orchestrator:
         p_data = intent_result.payload
         try:
             # Handle possible ISO string format from LLM
-            txn_time = datetime.fromisoformat(p_data["transaction_time"]) if p_data.get("transaction_time") else datetime.now(UTC)
+            txn_time = (
+                datetime.fromisoformat(p_data["transaction_time"])
+                if p_data.get("transaction_time")
+                else datetime.now(UTC)
+            )
         except ValueError:
             txn_time = datetime.now(UTC)
 
@@ -254,17 +388,52 @@ class Orchestrator:
         txn_id = await self._transaction_repo.insert(txn_doc)
         logger.info("Transaction stored via chat: %s", txn_id)
 
+        if parsed.merchant_name:
+            await self._check_subscription_match(
+                user_id, parsed.merchant_name, parsed.amount or 0.0,
+                parsed.transaction_time or datetime.now(UTC), chat_id, txn_id,
+            )
+
         return {
             "status": "stored",
             "transaction_id": txn_id,
             "parsed": parsed.model_dump(),
-            "response_text": intent_result.response_text or "Đã ghi nhận giao dịch của bạn!",
+            "response_text": intent_result.response_text
+            or "Đã ghi nhận giao dịch của bạn!",
         }
 
     async def _handle_scheduled(self, payload: dict) -> dict:
-        """Behavioral Agent -> Nudge."""
-        # TODO: Implement Behavioral pipeline (Phase 3)
-        return {"status": "not_implemented"}
+        """Behavioral Agent -> Nudge.
+
+        Expects payload: {user_id, chat_id, nudge_type, trigger_data}.
+        ``trigger_data`` is produced upstream by the trigger engine
+        (Phase 3.2); for Phase 3.1 callers (e.g. the worker, manual tests)
+        pass it directly.
+        """
+        user_id = payload.get("user_id")
+        chat_id = payload.get("chat_id")
+        nudge_type = payload.get("nudge_type")
+
+        if not user_id or not chat_id or not nudge_type:
+            return {
+                "status": "error",
+                "reason": "missing_fields",
+                "required": ["user_id", "chat_id", "nudge_type"],
+            }
+
+        request = NudgeRequest(
+            user_id=user_id,
+            chat_id=chat_id,
+            nudge_type=nudge_type,
+            trigger_data=payload.get("trigger_data") or {},
+        )
+        result = await self._behavioral.analyze(request)
+        return {
+            "status": "sent" if result.sent else "blocked",
+            "nudge_id": result.nudge_id,
+            "blocked_reason": result.blocked_reason,
+            "message": result.message,
+        }
 
     async def _handle_report(self, payload: dict) -> dict:
         """Reporting Agent -> Dashboard."""
@@ -272,35 +441,30 @@ class Orchestrator:
 
         user_id = payload.get("user_id")
         period_str = payload.get("period", "today")
+        user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
 
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
 
-        start_date, end_date = get_date_range(period_str)
+        start_date, end_date = get_date_range(period_str, timezone=user_tz)
         if not start_date:
             return {
                 "status": "error",
-                "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' đâu ạ. Bạn thử 'hôm nay', 'tuần này' hoặc 'tháng này' nhé!"
+                "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' đâu ạ. Bạn thử 'hôm nay', 'tuần này' hoặc 'tháng này' nhé!",
             }
 
         transactions = await self._transaction_repo.find_by_user(
-            user_id=user_id,
-            start_date=start_date,
-            end_date=end_date,
-            limit=100
+            user_id=user_id, start_date=start_date, end_date=end_date, limit=100
         )
 
         request = ReportRequest(
-            user_id=user_id,
-            report_type="summary",
-            period=period_str
+            user_id=user_id, report_type="summary", period=period_str
         )
 
-        result = await self._reporting.generate(request, transactions)
-        return {
-            "status": result["status"],
-            "response_text": result["report_text"]
-        }
+        result = await self._reporting.generate(
+            request, transactions, user_timezone=user_tz
+        )
+        return {"status": result["status"], "response_text": result["report_text"]}
 
     async def _handle_analysis(self, payload: dict) -> dict:
         """Analytics Agent -> Complex analysis."""
@@ -311,6 +475,7 @@ class Orchestrator:
         period_str = payload.get("period", "this_week")
         compare_period = payload.get("compare_period")
         category_filter = payload.get("category_filter")
+        user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
 
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
@@ -318,15 +483,15 @@ class Orchestrator:
         # Fetch current period data
         if analysis_type == "compare":
             (cur_start, cur_end), (comp_start, comp_end) = get_comparison_ranges(
-                period_str, compare_period
+                period_str, compare_period, timezone=user_tz
             )
-            
+
             if not cur_start or not comp_start:
                 return {
                     "status": "error",
-                    "response_text": "Mai chưa hỗ trợ mốc thời gian này để so sánh đâu ạ."
+                    "response_text": "Mai chưa hỗ trợ mốc thời gian này để so sánh đâu ạ.",
                 }
-                
+
             current_txns = await self._transaction_repo.find_by_user(
                 user_id=user_id, start_date=cur_start, end_date=cur_end, limit=200
             )
@@ -335,13 +500,13 @@ class Orchestrator:
             )
         else:
             # Trend: fetch current period only
-            start_date, end_date = get_date_range(period_str)
+            start_date, end_date = get_date_range(period_str, timezone=user_tz)
             if not start_date:
                 return {
                     "status": "error",
-                    "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' để phân tích xu hướng."
+                    "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' để phân tích xu hướng.",
                 }
-                
+
             current_txns = await self._transaction_repo.find_by_user(
                 user_id=user_id, start_date=start_date, end_date=end_date, limit=200
             )
@@ -355,7 +520,9 @@ class Orchestrator:
             category_filter=category_filter,
         )
 
-        result = await self._analytics.analyze(request, current_txns, comparison_txns)
+        result = await self._analytics.analyze(
+            request, current_txns, comparison_txns, user_timezone=user_tz
+        )
         return {
             "status": result["status"],
             "response_text": result["report_text"],
@@ -367,11 +534,12 @@ class Orchestrator:
 
         user_id = payload.get("user_id")
         period_str = payload.get("period", "this_month")
+        user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
 
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
 
-        start_date, end_date = get_date_range(period_str)
+        start_date, end_date = get_date_range(period_str, timezone=user_tz)
         if not start_date:
             return {
                 "status": "error",
@@ -417,13 +585,72 @@ class Orchestrator:
 
         return {"status": "success", "response_text": response}
 
+    async def _handle_ask_spending_vs_avg(self, payload: dict) -> dict:
+        """Compare current period spending (total + per-category) against historical average."""
+        from src.core.spending_avg import compute_avg_all_categories
+
+        user_id = payload.get("user_id")
+        period = payload.get("period", "weekly")
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+
+        profile = get_profile(user_id)
+        period_map = {"today": "daily", "this_week": "weekly", "this_month": "monthly"}
+        avg_period = period_map.get(period, "weekly")
+
+        total, cat_results = await compute_avg_all_categories(
+            self._transaction_repo, user_id,
+            period=avg_period, timezone=profile.timezone,
+        )
+
+        period_label = {"daily": "hôm nay", "weekly": "tuần này", "monthly": "tháng này"}.get(
+            avg_period, avg_period
+        )
+        baseline_label = {"daily": "14 ngày", "weekly": "4 tuần", "monthly": "3 tháng"}.get(
+            avg_period, ""
+        )
+
+        if not total.has_baseline:
+            return {
+                "status": "success",
+                "response_text": (
+                    f"Chưa đủ lịch sử để tính trung bình {period_label}. "
+                    f"Mai cần ít nhất {baseline_label} dữ liệu nhé!"
+                ),
+            }
+
+        def _arrow(pct: float | None) -> str:
+            if pct is None:
+                return "—"
+            if pct > 15:
+                return f"▲ +{pct:.0f}% ⚠️"
+            if pct < -15:
+                return f"▼ {pct:.0f}% 👍"
+            return f"→ {pct:+.0f}%"
+
+        lines = [
+            f"📊 <b>Chi tiêu {period_label} vs trung bình {baseline_label}:</b>\n",
+            f"<b>Tổng:</b> {total.current:,.0f}đ / TB {total.average:,.0f}đ  {_arrow(total.pct_diff)}",
+        ]
+
+        if cat_results:
+            lines.append("")
+            for r in cat_results[:6]:  # top 6 categories by current spend
+                lines.append(
+                    f"  {r.scope}: {r.current:,.0f}đ / TB {r.average:,.0f}đ  {_arrow(r.pct_diff)}"
+                )
+
+        return {"status": "success", "response_text": "\n".join(lines)}
+
     async def _handle_ask_category(self, payload: dict) -> dict:
         """List the configured spending categories in Vietnamese."""
         from src.core.categories import load_categories
 
         categories = load_categories()
         lines = [
-            f"{cat.icon_emoji} {cat.name}" for cat in categories if not cat.parent_category
+            f"{cat.icon_emoji} {cat.name}"
+            for cat in categories
+            if not cat.parent_category
         ]
         response = (
             "Các danh mục Mai đang phân loại:\n" + "\n".join(lines)
@@ -440,6 +667,7 @@ class Orchestrator:
         category_name = payload.get("category_name")
         limit_amount = payload.get("limit_amount")
         budget_period = payload.get("budget_period", "monthly")
+        user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
 
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
@@ -453,7 +681,7 @@ class Orchestrator:
                 ),
             }
 
-        start_date, end_date = get_budget_window(budget_period)
+        start_date, end_date = get_budget_window(budget_period, timezone=user_tz)
         if not start_date:
             return {
                 "status": "error",
@@ -472,6 +700,13 @@ class Orchestrator:
             end_date=end_date,
         )
         budget_id = await self._budget_repo.insert(budget)
+        await self._budget_event_repo.insert(BudgetEventDocument(
+            user_id=user_id,
+            budget_id=budget_id,
+            category_id=category_name,
+            event_type="created",
+            new_value={"limit_amount": float(limit_amount), "period": budget_period},
+        ))
         logger.info("Budget stored: %s", budget_id)
 
         period_label = "tuần này" if budget_period == "weekly" else "tháng này"
@@ -483,6 +718,242 @@ class Orchestrator:
             "status": "success",
             "budget_id": budget_id,
             "response_text": response,
+        }
+
+    async def _find_budget_by_category(self, user_id: str, category_name: str) -> dict | None:
+        """Find an active budget matching the given category name."""
+        budgets = await self._budget_repo.find_by_user(user_id)
+        for b in budgets:
+            if b.get("category_id", "").lower() == category_name.lower():
+                return b
+        return None
+
+    async def _handle_ask_budget(self, payload: dict) -> dict:
+        """Return current usage status for all active budgets."""
+        from src.core.utils import get_budget_window
+
+        user_id = payload.get("user_id")
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+
+        profile = get_profile(user_id)
+        tz_name = profile.timezone
+        now = datetime.now(UTC).replace(tzinfo=None)
+
+        budgets = await self._budget_repo.find_by_user(user_id)
+        if not budgets:
+            return {
+                "status": "success",
+                "response_text": (
+                    "Bạn chưa đặt ngân sách nào. "
+                    "Nhắn <i>'đặt ngân sách ăn uống 2 triệu tháng này'</i> để bắt đầu nhé!"
+                ),
+            }
+
+        lines = []
+        for b in budgets:
+            category = b.get("category_id", "?")
+            period = b.get("period", "monthly")
+            start, end = get_budget_window(period, timezone=tz_name)
+            if not start:
+                continue
+
+            txns = await self._transaction_repo.find_by_user(
+                user_id=user_id, start_date=start, end_date=now, limit=200
+            )
+            spent = sum(
+                t.get("amount", 0) for t in txns
+                if t.get("direction") == "outflow"
+                and (t.get("category_id") or "").lower() == category.lower()
+            )
+            limit = effective_limit(b, now)
+            pct = min(round(spent / limit * 100), 999) if limit > 0 else 0
+            bar = "🟩" * min(pct // 20, 5)
+            bar = bar or "⬜"
+            period_label = {"daily": "hôm nay", "weekly": "tuần", "monthly": "tháng"}.get(period, period)
+            silence_tag = " 🔕" if b.get("is_silenced") else ""
+            temp_tag = f" *(tạm {effective_limit(b, now):,.0f}đ)*" if b.get("temp_limit") else ""
+            lines.append(
+                f"{bar} <b>{category}</b>{silence_tag} — "
+                f"{spent:,.0f}/{limit:,.0f}đ ({pct}%) / {period_label}{temp_tag}"
+            )
+
+        return {
+            "status": "success",
+            "response_text": "📊 <b>Ngân sách hiện tại:</b>\n\n" + "\n".join(lines),
+        }
+
+    async def _handle_update_budget(self, payload: dict) -> dict:
+        """Update the base limit of an existing budget and record the change event."""
+        user_id = payload.get("user_id")
+        category_name = payload.get("category_name")
+        new_limit = payload.get("new_limit")
+
+        if not user_id or not category_name or not new_limit:
+            return {
+                "status": "error",
+                "response_text": (
+                    "Mai cần biết danh mục và số tiền mới nha. "
+                    "Ví dụ: <i>'tăng ngân sách ăn uống lên 3 triệu'</i>."
+                ),
+            }
+
+        budget = await self._find_budget_by_category(user_id, category_name)
+        if not budget:
+            return {
+                "status": "error",
+                "response_text": f"Không tìm thấy ngân sách <b>{category_name}</b> đang hoạt động.",
+            }
+
+        budget_id = str(budget["_id"])
+        old_limit = budget.get("limit_amount", 0)
+        await self._budget_repo.update_limit(budget_id, float(new_limit))
+        await self._budget_event_repo.insert(BudgetEventDocument(
+            user_id=user_id,
+            budget_id=budget_id,
+            category_id=budget["category_id"],
+            event_type="limit_updated",
+            old_value={"limit_amount": old_limit},
+            new_value={"limit_amount": float(new_limit)},
+        ))
+
+        direction = "tăng" if float(new_limit) > old_limit else "giảm"
+        return {
+            "status": "success",
+            "response_text": (
+                f"Đã {direction} ngân sách <b>{budget['category_id']}</b> "
+                f"từ {old_limit:,.0f}đ → <b>{float(new_limit):,.0f}đ</b> nhé!"
+            ),
+        }
+
+    async def _handle_temp_increase_budget(self, payload: dict) -> dict:
+        """Set a temporary limit override for the current cycle only."""
+        from src.core.utils import get_budget_window
+
+        user_id = payload.get("user_id")
+        category_name = payload.get("category_name")
+        temp_limit = payload.get("temp_limit")
+        reason = payload.get("reason")
+
+        if not user_id or not category_name or not temp_limit:
+            return {
+                "status": "error",
+                "response_text": (
+                    "Mai cần biết danh mục, số tiền tạm thời và lý do nha. "
+                    "Ví dụ: <i>'tăng tạm cà phê tuần này lên 1 triệu vì có meeting'</i>."
+                ),
+            }
+
+        budget = await self._find_budget_by_category(user_id, category_name)
+        if not budget:
+            return {
+                "status": "error",
+                "response_text": f"Không tìm thấy ngân sách <b>{category_name}</b> đang hoạt động.",
+            }
+
+        profile = get_profile(user_id)
+        period = budget.get("period", "weekly")
+        _, expires_at = get_budget_window(period, timezone=profile.timezone)
+        if not expires_at:
+            return {"status": "error", "response_text": "Không thể tính ngày hết hạn tạm thời."}
+
+        budget_id = str(budget["_id"])
+        old_limit = budget.get("limit_amount", 0)
+        await self._budget_repo.set_temp_override(budget_id, float(temp_limit), expires_at, reason)
+        await self._budget_event_repo.insert(BudgetEventDocument(
+            user_id=user_id,
+            budget_id=budget_id,
+            category_id=budget["category_id"],
+            event_type="temp_override_set",
+            old_value={"limit_amount": old_limit},
+            new_value={"temp_limit": float(temp_limit), "expires_at": expires_at.isoformat()},
+            reason=reason,
+        ))
+
+        period_label = {"daily": "hôm nay", "weekly": "tuần này", "monthly": "tháng này"}.get(period, period)
+        expires_str = expires_at.strftime("%d/%m")
+        return {
+            "status": "success",
+            "response_text": (
+                f"Đã tăng tạm ngân sách <b>{budget['category_id']}</b> "
+                f"lên <b>{float(temp_limit):,.0f}đ</b> cho {period_label} "
+                f"(hết hạn {expires_str}). "
+                f"Ngân sách gốc {old_limit:,.0f}đ sẽ tự khôi phục sau đó nhé! 👍"
+            ),
+        }
+
+    async def _handle_silence_budget(self, payload: dict) -> dict:
+        """Silence notifications for a budget. System still tracks but won't nudge."""
+        user_id = payload.get("user_id")
+        category_name = payload.get("category_name")
+
+        if not user_id or not category_name:
+            return {
+                "status": "error",
+                "response_text": "Mai cần biết danh mục muốn im lặng nha.",
+            }
+
+        budget = await self._find_budget_by_category(user_id, category_name)
+        if not budget:
+            return {
+                "status": "error",
+                "response_text": f"Không tìm thấy ngân sách <b>{category_name}</b>.",
+            }
+
+        budget_id = str(budget["_id"])
+        await self._budget_repo.silence(budget_id)
+        await self._budget_event_repo.insert(BudgetEventDocument(
+            user_id=user_id,
+            budget_id=budget_id,
+            category_id=budget["category_id"],
+            event_type="silenced",
+            old_value={"is_silenced": False},
+            new_value={"is_silenced": True},
+        ))
+
+        return {
+            "status": "success",
+            "response_text": (
+                f"Đã tắt thông báo ngân sách <b>{budget['category_id']}</b>. "
+                "Mai vẫn theo dõi nhưng sẽ không nhắc nữa nhé. 🔕"
+            ),
+        }
+
+    async def _handle_disable_budget(self, payload: dict) -> dict:
+        """Deactivate a budget entirely — stops tracking and notifications."""
+        user_id = payload.get("user_id")
+        category_name = payload.get("category_name")
+
+        if not user_id or not category_name:
+            return {
+                "status": "error",
+                "response_text": "Mai cần biết danh mục muốn tắt nha.",
+            }
+
+        budget = await self._find_budget_by_category(user_id, category_name)
+        if not budget:
+            return {
+                "status": "error",
+                "response_text": f"Không tìm thấy ngân sách <b>{category_name}</b> đang hoạt động.",
+            }
+
+        budget_id = str(budget["_id"])
+        await self._budget_repo.deactivate(budget_id)
+        await self._budget_event_repo.insert(BudgetEventDocument(
+            user_id=user_id,
+            budget_id=budget_id,
+            category_id=budget["category_id"],
+            event_type="disabled",
+            old_value={"is_active": True},
+            new_value={"is_active": False},
+        ))
+
+        return {
+            "status": "success",
+            "response_text": (
+                f"Đã tắt ngân sách <b>{budget['category_id']}</b>. "
+                "Lịch sử chi tiêu vẫn được giữ lại nhé."
+            ),
         }
 
     async def _handle_set_goal(self, payload: dict) -> dict:
@@ -533,6 +1004,335 @@ class Orchestrator:
             "goal_id": goal_id,
             "response_text": response,
         }
+
+    async def _handle_set_subscription(self, payload: dict) -> dict:
+        """Register a recurring subscription for the user."""
+        user_id = payload.get("user_id")
+        name = payload.get("name")
+        merchant_name = payload.get("merchant_name")
+        amount = payload.get("amount")
+        period = payload.get("period", "monthly")
+        next_date_raw = payload.get("next_charge_date")
+
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+        if not name or not merchant_name or not amount:
+            return {
+                "status": "error",
+                "response_text": (
+                    "Mai cần tên dịch vụ, tên merchant và số tiền nha. "
+                    "Ví dụ: <i>'đăng ký Netflix 260k mỗi tháng'</i>."
+                ),
+            }
+
+        next_charge: datetime | None = None
+        if next_date_raw:
+            try:
+                next_charge = datetime.fromisoformat(next_date_raw)
+            except (ValueError, TypeError):
+                next_charge = None
+        if not next_charge:
+            # Default: 1 month from now
+            from datetime import timedelta
+            next_charge = datetime.now(UTC) + timedelta(days=30)
+
+        sub = SubscriptionDocument(
+            user_id=user_id,
+            name=name,
+            merchant_name=merchant_name,
+            amount=float(amount),
+            period=period,
+            next_charge_date=next_charge,
+            source="manual",
+        )
+        sub_id = await self._subscription_repo.insert(sub)
+        logger.info("Subscription registered: %s id=%s", name, sub_id)
+
+        period_label = {"monthly": "tháng", "weekly": "tuần", "yearly": "năm"}.get(
+            period, period
+        )
+        next_str = next_charge.strftime("%d/%m/%Y")
+        return {
+            "status": "success",
+            "subscription_id": sub_id,
+            "response_text": (
+                f"Đã đăng ký theo dõi <b>{name}</b> "
+                f"<b>{float(amount):,.0f} VND/{period_label}</b>. "
+                f"Kỳ tới: <b>{next_str}</b> 🔄"
+            ),
+        }
+
+    async def _handle_list_subscriptions(self, payload: dict) -> dict:
+        """Return the user's active subscriptions as a formatted message."""
+        user_id = payload.get("user_id")
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+
+        subs = await self._subscription_repo.find_by_user(user_id)
+        if not subs:
+            return {
+                "status": "success",
+                "response_text": (
+                    "Bạn chưa đăng ký theo dõi phí định kỳ nào. "
+                    "Nhắn <i>'đăng ký Netflix 260k mỗi tháng'</i> để bắt đầu nhé!"
+                ),
+            }
+
+        period_label = {"monthly": "tháng", "weekly": "tuần", "yearly": "năm"}
+        lines = []
+        for s in subs:
+            period_str = period_label.get(s.get("period", "monthly"), "tháng")
+            next_date = s.get("next_charge_date")
+            next_str = next_date.strftime("%d/%m/%Y") if next_date else "?"
+            lines.append(
+                f"🔄 <b>{s['name']}</b> — "
+                f"{s['amount']:,.0f}đ/{period_str} "
+                f"(kỳ tới: {next_str})"
+            )
+
+        return {
+            "status": "success",
+            "response_text": "📋 <b>Phí định kỳ đang theo dõi:</b>\n\n" + "\n".join(lines),
+        }
+
+    async def _handle_mark_subscription_paid(self, payload: dict) -> dict:
+        """Manually mark a subscription as paid for the current period."""
+        user_id = payload.get("user_id")
+        merchant_name = payload.get("merchant_name")
+
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+        if not merchant_name:
+            return {
+                "status": "error",
+                "response_text": (
+                    "Mai cần biết tên dịch vụ nào nha. "
+                    "Ví dụ: <i>'Netflix đã trả rồi'</i>."
+                ),
+            }
+
+        sub = await self._subscription_repo.find_by_merchant(user_id, merchant_name)
+        if not sub:
+            return {
+                "status": "error",
+                "response_text": (
+                    f"Mai không tìm thấy đăng ký nào cho <b>{merchant_name}</b>. "
+                    "Bạn đã đăng ký theo dõi chưa nhỉ?"
+                ),
+            }
+
+        sub_id = str(sub["_id"])
+        await self._subscription_repo.mark_charged(sub_id, datetime.now(UTC))
+        next_date = sub.get("next_charge_date")
+        from datetime import timedelta
+        period = sub.get("period", "monthly")
+        days = {"weekly": 7, "monthly": 30, "yearly": 365}.get(period, 30)
+        next_date_advanced = (next_date + timedelta(days=days)) if next_date else None
+        next_str = next_date_advanced.strftime("%d/%m/%Y") if next_date_advanced else "?"
+
+        logger.info("Subscription '%s' manually marked paid by user %s", merchant_name, user_id)
+        return {
+            "status": "success",
+            "response_text": (
+                f"Đã đánh dấu <b>{sub['name']}</b> đã thanh toán kỳ này! "
+                f"Kỳ tới: <b>{next_str}</b> 🔄"
+            ),
+        }
+
+    async def _handle_cancel_subscription(self, payload: dict) -> dict:
+        """Mark a subscription inactive. Past transactions remain linked and trackable."""
+        user_id = payload.get("user_id")
+        merchant_name = payload.get("merchant_name")
+
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+        if not merchant_name:
+            return {
+                "status": "error",
+                "response_text": "Mai cần biết tên dịch vụ muốn huỷ nha. Ví dụ: <i>'huỷ Netflix'</i>.",
+            }
+
+        sub = await self._subscription_repo.find_by_merchant(user_id, merchant_name)
+        if not sub:
+            return {
+                "status": "error",
+                "response_text": (
+                    f"Mai không tìm thấy đăng ký nào cho <b>{merchant_name}</b>. "
+                    "Bạn đã đăng ký theo dõi chưa nhỉ?"
+                ),
+            }
+
+        sub_id = str(sub["_id"])
+        await self._subscription_repo.deactivate(sub_id, reason="manual")
+        logger.info("Subscription '%s' cancelled by user %s", merchant_name, user_id)
+        return {
+            "status": "success",
+            "response_text": (
+                f"Đã huỷ theo dõi <b>{sub['name']}</b>. "
+                "Các giao dịch trước vẫn được lưu lại đầy đủ nhé."
+            ),
+        }
+
+    async def _handle_update_subscription(self, payload: dict) -> dict:
+        """Deactivate the old subscription and create a new one (marks old as 'replaced').
+
+        All future charges will be linked to the new subscription.
+        Past transactions remain linked to the old subscription_id for history.
+        """
+        from datetime import timedelta
+
+        user_id = payload.get("user_id")
+        merchant_name = payload.get("merchant_name")
+        new_amount = payload.get("new_amount")
+        new_period = payload.get("new_period")
+        new_next_date_raw = payload.get("new_next_date")
+
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+        if not merchant_name or not new_amount:
+            return {
+                "status": "error",
+                "response_text": (
+                    "Mai cần biết tên dịch vụ và giá mới nha. "
+                    "Ví dụ: <i>'Netflix tăng giá lên 300k từ tháng sau'</i>."
+                ),
+            }
+
+        old_sub = await self._subscription_repo.find_by_merchant(user_id, merchant_name)
+        if not old_sub:
+            return {
+                "status": "error",
+                "response_text": (
+                    f"Mai không tìm thấy đăng ký nào cho <b>{merchant_name}</b>. "
+                    "Bạn đã đăng ký theo dõi chưa nhỉ?"
+                ),
+            }
+
+        old_sub_id = str(old_sub["_id"])
+        now = datetime.now(UTC)
+        await self._subscription_repo.deactivate(old_sub_id, reason="replaced", cancelled_at=now)
+
+        period = new_period or old_sub.get("period", "monthly")
+        next_charge: datetime | None = None
+        if new_next_date_raw:
+            try:
+                next_charge = datetime.fromisoformat(new_next_date_raw)
+            except (ValueError, TypeError):
+                pass
+        if not next_charge:
+            days = {"weekly": 7, "monthly": 30, "yearly": 365}.get(period, 30)
+            next_charge = now + timedelta(days=days)
+
+        new_sub = SubscriptionDocument(
+            user_id=user_id,
+            name=old_sub.get("name", merchant_name),
+            merchant_name=old_sub.get("merchant_name", merchant_name),
+            amount=float(new_amount),
+            period=period,
+            next_charge_date=next_charge,
+            source=old_sub.get("source", "manual"),
+            replaces_id=old_sub_id,
+        )
+        new_sub_id = await self._subscription_repo.insert(new_sub)
+        logger.info(
+            "Subscription '%s' updated: old=%s new=%s", merchant_name, old_sub_id, new_sub_id
+        )
+
+        period_label = {"monthly": "tháng", "weekly": "tuần", "yearly": "năm"}.get(period, period)
+        next_str = next_charge.strftime("%d/%m/%Y")
+        return {
+            "status": "success",
+            "subscription_id": new_sub_id,
+            "response_text": (
+                f"Đã cập nhật <b>{new_sub.name}</b>: "
+                f"<b>{float(new_amount):,.0f} VND/{period_label}</b>. "
+                f"Kỳ tới: <b>{next_str}</b> 🔄\n"
+                "Lịch sử giao dịch cũ vẫn được giữ nguyên nhé."
+            ),
+        }
+
+    async def _check_subscription_match(
+        self,
+        user_id: str,
+        merchant_name: str,
+        amount: float,
+        charged_at: datetime,
+        chat_id: str,
+        transaction_id: str | None = None,
+    ) -> None:
+        """After storing a transaction, check if it matches a subscription.
+
+        - Registered subscription → mark paid, advance next_charge_date,
+          and link the transaction to the subscription via subscription_id.
+        - Unregistered but recurring pattern (2+ prior charges same merchant,
+          similar amount, ~monthly interval) → ask user to register.
+        """
+        sub = await self._subscription_repo.find_by_merchant(user_id, merchant_name)
+        if sub:
+            sub_id = str(sub["_id"])
+            await self._subscription_repo.mark_charged(sub_id, charged_at)
+            if transaction_id:
+                await self._transaction_repo.set_subscription_id(transaction_id, sub_id)
+            logger.info(
+                "Subscription '%s' marked charged for user %s", merchant_name, user_id
+            )
+            return
+
+        # Check for unregistered recurring pattern
+        history = await self._transaction_repo.find_by_merchant(
+            user_id, merchant_name, limit=5
+        )
+        if self._is_recurring_pattern(history, amount):
+            period_label = "tháng"  # default assumption for detected patterns
+            await self._telegram.send_message(
+                chat_id=chat_id,
+                text=(
+                    f"🔄 <b>{merchant_name}</b> có vẻ là phí định kỳ "
+                    f"({amount:,.0f}đ/{period_label}). "
+                    f"Đăng ký theo dõi để Mai nhắc trước kỳ trừ tiền không?\n\n"
+                    f"Nhắn <i>'đăng ký {merchant_name} {amount:,.0f}đ mỗi tháng'</i> để xác nhận."
+                ),
+            )
+            logger.info(
+                "Recurring pattern detected for '%s' user=%s — prompted user",
+                merchant_name,
+                user_id,
+            )
+
+    @staticmethod
+    def _is_recurring_pattern(history: list[dict], current_amount: float) -> bool:
+        """Return True when history shows ≥2 prior outflow charges with similar
+        amounts (~±30%) and intervals of 7–40 days (weekly/monthly cadence).
+        """
+        if len(history) < 2:
+            return False
+
+        outflow = [
+            h for h in history
+            if h.get("direction") == "outflow" and h.get("amount", 0) > 0
+        ]
+        if len(outflow) < 2:
+            return False
+
+        # Amount similarity: all within ±30% of current_amount
+        lo, hi = current_amount * 0.7, current_amount * 1.3
+        similar = [h for h in outflow if lo <= h.get("amount", 0) <= hi]
+        if len(similar) < 2:
+            return False
+
+        # Interval check: gaps between sorted charge dates 7–40 days
+        dates = sorted(
+            h["transaction_time"] for h in similar if h.get("transaction_time")
+        )
+        if len(dates) < 2:
+            return False
+
+        for i in range(1, len(dates)):
+            delta = (dates[i] - dates[i - 1]).days
+            if not (7 <= delta <= 40):
+                return False
+
+        return True
 
     async def _handle_correction(self, payload: dict) -> dict:
         """Apply a user correction: update the transaction, invalidate

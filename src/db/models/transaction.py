@@ -19,3 +19,4 @@ class TransactionDocument(BaseModel):
     agent_confidence: Literal["high", "medium", "low"] = "low"
     user_corrected: bool = False
     ai_metadata: dict = Field(default_factory=dict)
+    subscription_id: str | None = None   # set when this charge matches a registered subscription

@@ -38,6 +38,16 @@ class Settings(BaseSettings):
     # Empty → use the bundled default at <project>/config/categories.json.
     categories_file: str = ""
 
+    # User profiles — JSON map keyed by telegram_user_id. Drives the
+    # Behavioral Agent's nudge personalization. Empty → bundled default
+    # at <project>/config/user_profiles.json.
+    user_profiles_file: str = ""
+
+    # Behavioral / nudge limits.
+    nudge_max_per_day: int = 2
+    nudge_quiet_hour_start: int = 22  # inclusive, local time
+    nudge_quiet_hour_end: int = 7  # exclusive, local time
+
     @property
     def allowed_user_ids(self) -> list[str]:
         if not self.telegram_allowed_user_ids:

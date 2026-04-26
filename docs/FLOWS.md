@@ -1,11 +1,12 @@
 # ChiWi — Business Logic Flows
 
-## 1. Transaction Ingestion Flow (Notification → Stored Transaction)
+## 1. Transaction Ingestion Flow (Android → Stored Transaction)
+
+The Android app is a **sensor only** — it captures the raw notification text and forwards it verbatim. All AI parsing happens server-side so bank format changes are fixed with a backend deploy, not a mobile release.
 
 ```mermaid
 sequenceDiagram
-    participant Phone as 📱 Phone
-    participant MD as MacroDroid/Tasker
+    participant Android as 📱 Android App
     participant GW as FastAPI Gateway
     participant Orch as Orchestrator
     participant IA as Ingestion Agent
@@ -14,23 +15,21 @@ sequenceDiagram
     participant Redis as Redis
     participant TG as Telegram Bot
 
-    Phone->>MD: Bank notification received
-    MD->>GW: HTTP POST /api/webhook/notification
-    GW->>GW: Validate auth (user_id)
-    GW->>GW: Mask PII (account numbers)
+    Android->>GW: POST /api/webhook/notification {raw_text, bank_hint, timestamp}
+    Note over Android: Android only captures + forwards.<br/>No parsing on mobile.
+    GW->>GW: Validate auth (X-User-Id)
+    GW->>GW: Mask PII (account numbers, phone numbers)
     GW->>Orch: Forward masked payload
-    Orch->>Redis: Load user session context
     Orch->>IA: Route to Ingestion Agent
-    IA->>IA: Gemini Flash: extract amount, merchant, time
-    IA-->>Orch: Parsed transaction data
+    IA->>IA: Gemini Flash: extract amount, merchant, direction, time
+    IA-->>Orch: ParsedTransaction (or is_transaction=false → stop)
     Orch->>TA: Route to Tagging Agent
+    TA->>Redis: Check merchant cache (7-day TTL)
     TA->>Mongo: Query historical tags for merchant
     TA->>TA: Gemini Flash: classify category + generate tags
     TA-->>Orch: Enriched transaction
-    Orch->>Mongo: Insert transaction document
-    Orch->>Redis: Update daily stats cache
-    Orch->>TG: Send confirmation message + Edit button
-    TG->>Phone: "✅ -100k | ☕ Highlands Coffee | Cafe"
+    Orch->>Mongo: Insert TransactionDocument
+    Orch->>TG: "✅ -100k | ☕ Highlands Coffee | Cafe"
 ```
 
 ## 2. Chat-to-Transaction Flow (Natural Language → Transaction)
@@ -91,38 +90,70 @@ sequenceDiagram
 
 ## 4. Behavioral Nudge Flow
 
+Two entry points share the same `BehavioralAgent.analyze()` pipeline.
+
+### 4a. Cron Worker Path (Scheduled)
+
 ```mermaid
 sequenceDiagram
-    participant Cron as ⏰ Scheduled Worker
+    participant Cron as ⏰ worker.py (cron)
+    participant Orch as Orchestrator
+    participant Profiles as user_profiles.json
     participant BA as Behavioral Agent
+    participant NudgeRepo as NudgeRepository
     participant Mongo as MongoDB
-    participant Redis as Redis
     participant TG as Telegram Bot
     participant User as 💬 User
 
-    Cron->>BA: Trigger daily analysis
-    BA->>Mongo: Query user profile + recent transactions
-    BA->>Mongo: Query historical spending patterns
-    BA->>BA: Gemini Pro: analyze behavior patterns
-    Note over BA: Detected: 5th cafe this week<br/>Budget: 70% used (day 20/30)<br/>Goal: Camera lens fund stalled
-
-    alt Spending Alert Needed
-        BA->>Mongo: Insert nudge record
-        BA->>TG: Send nudge message
-        TG->>User: "☕ Tuần này bạn đã chi 500k cho cafe — bằng nửa cuộn Kodak Portra!"
+    Cron->>Profiles: configured_user_ids()
+    loop For each configured user
+        Cron->>Cron: _collect_triggers(user_id) → trigger list
+        Note over Cron: Phase 3.2 seam: spending_alert,<br/>budget_warning, goal_progress etc.
+        loop For each trigger
+            Cron->>Orch: route("scheduled", {user_id, nudge_type, trigger_data, chat_id})
+            Orch->>BA: analyze(NudgeRequest)
+            BA->>Profiles: get_profile(user_id) → timezone, hobbies, tone
+            BA->>BA: _spam_check()
+            Note over BA: quiet hours 22:00–07:00 (user tz)<br/>daily limit (NUDGE_MAX_PER_DAY)<br/>24 h dedup by nudge_type
+            alt Spam check passes
+                BA->>BA: Build TOON payload (profile + trigger_data)
+                BA->>BA: Gemini Pro → {message, should_send}
+                alt should_send = true
+                    BA->>TG: send_silent_message(chat_id, message)
+                    BA->>NudgeRepo: insert(NudgeDocument)
+                    TG->>User: "☕ 500k cafe — bằng nửa cuộn Kodak Portra!"
+                end
+            end
+        end
     end
+```
 
-    alt Budget Warning
-        BA->>Mongo: Insert nudge record
-        BA->>TG: Send budget alert
-        TG->>User: "⚠️ Đã dùng 70% ngân sách Ăn uống, còn 10 ngày"
-    end
+### 4b. Telegram Command Path (`/nudge`)
 
-    alt Positive Reinforcement
-        BA->>Mongo: Insert nudge record
-        BA->>TG: Send encouragement
-        TG->>User: "🎉 3 ngày liên tiếp chi tiêu dưới mức TB. Tiếp tục nhé!"
-    end
+```mermaid
+sequenceDiagram
+    participant User as 💬 User
+    participant TG as Telegram
+    participant GW as FastAPI Gateway
+    participant WH as webhook.py handler
+    participant Orch as Orchestrator
+    participant BA as Behavioral Agent
+    participant NudgeRepo as NudgeRepository
+    participant Mongo as MongoDB
+
+    User->>TG: /nudge [spending|budget|goal|streak|sub|impulse]
+    TG->>GW: Telegram webhook update
+    GW->>WH: _handle_command("nudge", args, chat_id, from_id)
+    WH->>Mongo: _spending_summary(from_id)
+    Note over WH: Queries this week's transactions<br/>{period, total_outflow, top_categories}
+    WH->>Orch: route("scheduled", {user_id=from_id, nudge_type, trigger_data={…summary, source="telegram"}, chat_id})
+    Orch->>BA: analyze(NudgeRequest)
+    BA->>BA: get_profile(user_id) → load profile
+    Note over BA: source="telegram" → skip spam block,<br/>always should_send=true
+    BA->>BA: Build TOON payload → Gemini Pro
+    BA->>TG: send_silent_message(chat_id, message)
+    BA->>NudgeRepo: insert(NudgeDocument)
+    TG->>User: Personalised nudge message
 ```
 
 ## 5. Report Generation Flow
@@ -133,18 +164,17 @@ sequenceDiagram
     participant RA as Reporting Agent
     participant Mongo as MongoDB
     participant TG as Telegram
-    participant MiniApp as Mini App Dashboard
 
     Trigger->>RA: Generate weekly report
     RA->>Mongo: Aggregate transactions (last 7 days)
-    RA->>RA: Gemini Pro: generate insights narrative
-    Note over RA: Total: -2.5M VND<br/>Top: Food (40%), Transport (20%)<br/>Trend: +15% vs last week<br/>Insight: "Subscription renewal spike"
+    RA->>RA: Gemini Flash: generate insights narrative
+    Note over RA: Total: -2.5M VND<br/>Top: Food (40%), Transport (20%)<br/>Trend: +15% vs last week
     RA->>Mongo: Cache report document
-    RA->>TG: Send summary message
+    RA->>TG: Send formatted summary
     TG->>TG: "📊 Tuần này: -2.5M | Top: 🍔 40% 🚗 20%"
-    TG->>TG: Attach "Xem chi tiết" button
-    Note over MiniApp: User taps → Opens Mini App<br/>with full charts & breakdown
 ```
+
+> Visual dashboard (charts, drill-downs) is out of scope for this repo — deferred to the Android app in a separate repository.
 
 ## 6. Voice Input Flow
 
@@ -173,7 +203,110 @@ sequenceDiagram
     Orch->>TG: "✅ -200k | 🚗 Đổ xăng"
 ```
 
-## 7. System Startup Flow
+## 7. Subscription Management Flow
+
+### 7a. Register a subscription (chat)
+
+```mermaid
+sequenceDiagram
+    participant User as 💬 User
+    participant TG as Telegram
+    participant Orch as Orchestrator
+    participant CA as Conversational Agent
+    participant SubRepo as SubscriptionRepository
+
+    User->>TG: "đăng ký Netflix 260k mỗi tháng"
+    TG->>Orch: route("chat", ...)
+    Orch->>CA: process_message()
+    CA->>CA: Gemini Pro → intent: set_subscription
+    Note over CA: name=Netflix, amount=260000,<br/>period=monthly
+    CA-->>Orch: IntentResult
+    Orch->>SubRepo: insert(SubscriptionDocument)
+    Orch->>TG: "✅ Netflix 260k/tháng. Kỳ tới: 27/05 🔄"
+    TG->>User: Confirmation
+```
+
+### 7b. Auto-detect unregistered recurring charge
+
+```mermaid
+sequenceDiagram
+    participant Phone as 📱 Phone
+    participant Orch as Orchestrator
+    participant SubRepo as SubscriptionRepository
+    participant TxnRepo as TransactionRepository
+    participant TG as Telegram Bot
+    participant User as 💬 User
+
+    Phone->>Orch: Bank notification "Netflix trừ 260k"
+    Orch->>Orch: Ingestion → Tagging → Store transaction
+    Orch->>SubRepo: find_by_merchant(user_id, "Netflix")
+    SubRepo-->>Orch: None (not registered)
+    Orch->>TxnRepo: find_by_merchant(user_id, "Netflix", limit=5)
+    Orch->>Orch: _is_recurring_pattern() → True
+    Note over Orch: ≥2 prior outflows, ±30% amount,<br/>7–40 day intervals
+    Orch->>TG: "🔄 Netflix có vẻ là phí định kỳ. Đăng ký theo dõi không?"
+    TG->>User: Prompt message
+    Note over User: User can reply "đăng ký Netflix 260k mỗi tháng"
+```
+
+### 7c. Incoming charge matches registered subscription
+
+```mermaid
+sequenceDiagram
+    participant Phone as 📱 Phone
+    participant Orch as Orchestrator
+    participant SubRepo as SubscriptionRepository
+
+    Phone->>Orch: Bank notification "Netflix trừ 260k"
+    Orch->>Orch: Ingestion → Tagging → Store transaction
+    Orch->>SubRepo: find_by_merchant(user_id, "Netflix")
+    SubRepo-->>Orch: SubscriptionDocument found
+    Orch->>SubRepo: mark_charged(sub_id, charged_at)
+    Note over SubRepo: last_charged_at = now<br/>next_charge_date += 30 days
+```
+
+### 7d. Manual mark paid (chat)
+
+```mermaid
+sequenceDiagram
+    participant User as 💬 User
+    participant TG as Telegram
+    participant Orch as Orchestrator
+    participant CA as Conversational Agent
+    participant SubRepo as SubscriptionRepository
+
+    User->>TG: "Netflix đã trả rồi"
+    TG->>Orch: route("chat", ...)
+    Orch->>CA: process_message()
+    CA->>CA: Gemini Pro → intent: mark_subscription_paid
+    CA-->>Orch: {subscription_merchant: "Netflix"}
+    Orch->>SubRepo: find_by_merchant(user_id, "Netflix")
+    Orch->>SubRepo: mark_charged(sub_id, now)
+    Orch->>TG: "✅ Netflix đã thanh toán kỳ này! Kỳ tới: 27/06 🔄"
+    TG->>User: Confirmation
+```
+
+### 7e. Subscription reminder (cron)
+
+```mermaid
+sequenceDiagram
+    participant Cron as ⏰ worker.py
+    participant SubRepo as SubscriptionRepository
+    participant Orch as Orchestrator
+    participant BA as Behavioral Agent
+    participant TG as Telegram Bot
+    participant User as 💬 User
+
+    Cron->>SubRepo: find_upcoming(user_id, within_hours=48)
+    SubRepo-->>Cron: [Netflix — 260k — next: tomorrow]
+    Cron->>Orch: route("scheduled", {nudge_type: subscription_reminder, trigger_data: {...}})
+    Orch->>BA: analyze(NudgeRequest)
+    BA->>BA: Gemini Pro → reminder message
+    BA->>TG: send_silent_message()
+    TG->>User: "🔄 Netflix trừ 260k ngày mai"
+```
+
+## 8. System Startup Flow
 
 ```mermaid
 flowchart TD

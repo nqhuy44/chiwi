@@ -3,7 +3,6 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-
 # --- Agent Communication ---
 
 
@@ -20,11 +19,15 @@ class AgentMessage(BaseModel):
 
 
 class NotificationPayload(BaseModel):
-    source: str  # "macrodroid", "tasker", "ios_shortcut"
-    app_package: str | None = None
-    notification_title: str | None = None
-    notification_text: str
-    timestamp: str
+    """Raw bank notification forwarded from the Android app.
+
+    The Android app captures the notification text verbatim and sends it here.
+    All AI parsing (amount, merchant, direction) is done server-side by the
+    Ingestion Agent so parsing logic can be improved without a mobile release.
+    """
+    raw_text: str
+    bank_hint: str | None = None   # optional bank name hint from Android (e.g. "Vietcombank")
+    timestamp: str                  # ISO8601, when the notification was received on device
 
 
 class ParsedTransaction(BaseModel):
@@ -60,8 +63,32 @@ class EnrichedTransaction(BaseModel):
 # --- Behavioral ---
 
 
+class UserProfile(BaseModel):
+    """Personalization profile loaded from `config/user_profiles.json`.
+
+    Drives the Behavioral Agent's nudge tone and analogies. Stored outside
+    the codebase so the user can tweak occupation/hobbies without redeploying.
+    """
+
+    occupation: str = ""
+    hobbies: list[str] = Field(default_factory=list)
+    interests: list[str] = Field(default_factory=list)
+    communication_tone: Literal["friendly", "playful", "formal", "concise"] = "friendly"
+    nudge_frequency: Literal["off", "daily", "weekly"] = "daily"
+    language: str = "vi"
+    # IANA timezone for this user. All data is stored UTC; this is used
+    # for day-boundary math (reports, budgets) and for formatting dates
+    # in Gemini-generated narratives. Overrides settings.business_timezone.
+    timezone: str = "Asia/Ho_Chi_Minh"
+    # Required for the worker to deliver scheduled nudges. Stored in the
+    # profile file rather than the DB so the user can edit it directly.
+    chat_id: str = ""
+    extras: dict = Field(default_factory=dict)
+
+
 class NudgeRequest(BaseModel):
     user_id: str
+    chat_id: str
     nudge_type: str
     trigger_data: dict = Field(default_factory=dict)
 
@@ -92,10 +119,22 @@ class AnalysisRequest(BaseModel):
     category_filter: str | None = None  # e.g., "Ăn uống"
 
 
+# --- Subscriptions ---
+
+
+class SetSubscriptionRequest(BaseModel):
+    user_id: str
+    name: str
+    merchant_name: str
+    amount: float
+    period: str  # "weekly" | "monthly" | "yearly"
+    next_charge_date: datetime | None = None
+
+
 # --- API Responses ---
 
 
-class WebhookResponse(BaseModel):
+class NotificationResponse(BaseModel):
     status: str
     transaction_id: str | None = None
     parsed: dict | None = None

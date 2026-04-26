@@ -79,9 +79,9 @@ graph TD
 
 ### **Phase 3: Proactivity (The Behavioral Engine)**
 
-* **3.1**: Implement **Behavioral Agent** with user profiling (Nghề nghiệp, sở thích).  
-* **3.2**: Create the "Nudge" engine \- automated triggers for positive/negative reinforcement.  
-* **3.3**: Build a Telegram Mini App for visual charts (React/Tailwind).  
+* **3.1**: Implement **Behavioral Agent** with user profiling (Nghề nghiệp, sở thích). ✅ Done  
+* **3.2**: Create the "Nudge" engine — automated triggers (subscription reminders wired; spending_alert/budget_warning TODO). ✅ Partially done  
+* **3.3**: ~~Build a Telegram Mini App for visual charts (React/Tailwind)~~ — **Deferred.** Android/dashboard app will be built in a separate repository.  
 * *Metric*: User engagement with nudges (replies/actions).
 
 ## **6\. Security**

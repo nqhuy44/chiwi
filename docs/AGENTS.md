@@ -4,6 +4,8 @@
 
 ChiWi operates as a **swarm of 6 specialized AI agents**, each with a distinct system prompt, toolset, and responsibility. The agents are orchestrated by a central **Orchestrator** that follows a **"Think-First"** routing pattern.
 
+**Mobile / backend split:** The Android app (separate repository) is a sensor — it captures raw bank notification text and forwards it verbatim to `POST /api/webhook/notification`. All AI logic (parsing, tagging, behavioral analysis, reporting) runs on the backend. This means parsing bugs can be fixed with a server deploy, never a mobile release.
+
 ## Orchestration Model
 
 ```mermaid
@@ -34,11 +36,11 @@ The Orchestrator classifies each incoming event before dispatching:
 
 | Event Type | Route | Agent Pipeline |
 |---|---|---|
-| Bank notification webhook | `notification` | Ingestion → Tagging → Store |
+| Android notification webhook | `notification` | Ingestion → Tagging → Store |
 | Telegram text message | `chat` | Conversational → Tagging → Store |
 | Telegram voice message | `voice` | Conversational (STT) → Tagging → Store |
 | Scheduled cron trigger | `scheduled` | Behavioral → Nudge |
-| User report request | `report` | Reporting → Dashboard |
+| User report request | `report` | Reporting → Telegram |
 | User analysis request | `analysis` | Analytics → Telegram |
 | Edit callback button | `correction` | Direct DB update + learn |
 
@@ -52,39 +54,16 @@ The Orchestrator classifies each incoming event before dispatching:
 |---|---|
 | **File** | `src/agents/ingestion.py` |
 | **LLM** | Gemini 2.5 Flash |
-| **Trigger** | Webhook from MacroDroid/Tasker/iOS Shortcuts |
-| **Input** | Raw bank notification text (PII-masked) |
-| **Output** | Structured `ParsedTransaction` schema |
+| **Trigger** | `POST /api/webhook/notification` from Android app |
+| **Input** | Raw bank notification text (PII-masked) + optional bank hint |
+| **Output** | Structured `ParsedTransaction` |
 
 **Responsibilities**:
-- Filter noise (non-financial notifications)
+- Filter noise (non-financial notifications) — returns `is_transaction: false`
 - Extract: amount, currency, direction (inflow/outflow), merchant name, timestamp
-- Handle diverse Vietnamese bank formats (VCB, TCB, MBBank, ACB, etc.)
-- Detect duplicate notifications
+- Handle Vietnamese bank notification formats (VCB, TCB, MBBank, ACB, MoMo, etc.)
 
-**System Prompt Outline**:
-```
-You are a Vietnamese bank notification parser. Given a raw notification text,
-extract structured financial data. Output JSON only.
-Fields: amount, currency, direction, merchant_name, transaction_time, bank_name.
-If the text is NOT a financial transaction, return {"is_transaction": false}.
-```
-
-**Output Schema** (Pydantic):
-```python
-class ParsedTransaction(BaseModel):
-    is_transaction: bool
-    amount: float | None
-    currency: str = "VND"
-    direction: Literal["inflow", "outflow"] | None
-    merchant_name: str | None
-    transaction_time: datetime | None
-    bank_name: str | None
-    raw_text: str
-    confidence: Literal["high", "medium", "low"]
-```
-
-**Performance Target**: 90%+ accuracy on amount/merchant extraction.
+**Why server-side:** Parsing logic can be improved (prompt edits, new bank formats) with a backend deploy only — the Android app never needs to be updated for parsing changes.
 
 ---
 
@@ -120,7 +99,13 @@ If the user is asking a question (not logging a transaction), respond conversati
 | `log_transaction` | "Ăn phở 60k hôm qua" | Parse → Tagging → Store |
 | `ask_balance` | "Tháng này chi bao nhiêu rồi?" | Query Mongo → Respond |
 | `request_report` | "Báo cáo tuần này" | Route to Reporting Agent |
-| `set_budget` | "Đặt ngân sách ăn uống 3 triệu" | Update budget → Confirm |
+| `request_analysis` | "So sánh tuần này với tuần trước" | Route to Analytics Agent |
+| `set_budget` | "Đặt ngân sách ăn uống 3 triệu" | Insert BudgetDocument → Confirm |
+| `set_goal` | "Mục tiêu tiết kiệm 20 triệu mua laptop" | Insert GoalDocument → Confirm |
+| `set_subscription` | "Đăng ký Netflix 260k mỗi tháng" | Insert SubscriptionDocument → Confirm |
+| `list_subscriptions` | "Danh sách đăng ký của tôi" | Query subscriptions → List |
+| `mark_subscription_paid` | "Netflix đã trả rồi" | `mark_charged()` → advance next date |
+| `ask_category` | "Có những danh mục nào?" | List categories → Respond |
 | `general_chat` | "Chào ChiWi" | Conversational response |
 
 ---
@@ -172,31 +157,56 @@ flowchart TD
 |---|---|
 | **File** | `src/agents/behavioral.py` |
 | **LLM** | Gemini 2.5 Pro |
-| **Trigger** | Scheduled cron (daily/hourly) |
-| **Input** | Aggregated transactions + user profile |
-| **Output** | Nudge messages sent via Telegram |
+| **Trigger** | Scheduled cron (daily) via `worker.py` OR Telegram `/nudge` command |
+| **Input** | Trigger payload + user profile from `config/user_profiles.json` |
+| **Output** | Personalized nudge sent via Telegram silent message; `NudgeDocument` persisted |
 
 **Responsibilities**:
-- Analyze spending patterns and detect anomalies
-- Compare current spending against budgets and goals
-- Generate personalized nudge messages in Vietnamese
-- Use user profile (occupation, hobbies) for relatable analogies
-- Track nudge effectiveness (was_read, user_acted)
+- Load personalization profile (occupation, hobbies, tone, timezone) from config file
+- Apply anti-spam rules before calling LLM
+- Build TOON-encoded context with profile + trigger data → Gemini Pro
+- Deliver via Telegram silent message; persist audit record
 
-**Nudge Categories**:
+**Profile-driven personalization** (`config/user_profiles.json`):
 
-| Type | Trigger | Example |
+The agent reads each user's profile to craft relatable analogies.
+- **Generic nudge**: "Bạn đã chi quá nhiều cafe tuần này."
+- **Profile nudge**: "☕ 500k cafe tuần này — bằng nửa cuộn Kodak Portra 400! 🎞️"
+
+**Nudge types**:
+
+| Type | Trigger condition | Example |
 |---|---|---|
-| `spending_alert` | Unusual spending spike | "☕ 500k cafe tuần này — bằng nửa cuộn Kodak Portra!" |
-| `budget_exceeded` | Budget threshold crossed | "⚠️ Đã dùng 80% ngân sách Ăn uống" |
-| `goal_progress` | Goal milestone | "🎯 Quỹ mua lens đạt 50%! Còn 7.5M nữa" |
-| `saving_streak` | Positive behavior | "🎉 3 ngày chi dưới trung bình. Giỏi lắm!" |
-| `subscription_reminder` | Recurring charge detected | "🔄 Netflix sẽ trừ 260k ngày mai" |
+| `spending_alert` | Category spike vs weekly average | "☕ 500k cafe — bằng nửa cuộn Kodak!" |
+| `budget_warning` | Budget usage ≥ 70% | "⚠️ Đã dùng 70% ngân sách Ăn uống" |
+| `budget_exceeded` | Budget limit crossed | "🚨 Vượt ngân sách Mua sắm rồi" |
+| `goal_progress` | 25/50/75% milestone | "🎯 Quỹ lens đạt 50%! Còn 7.5M nữa" |
+| `saving_streak` | 3+ days below daily average | "🎉 3 ngày chi tiêu dưới mức TB. Giỏi!" |
+| `subscription_reminder` | Recurring charge upcoming | "🔄 Netflix trừ 260k ngày mai" |
+| `impulse_detection` | 3+ unplanned purchases in 24h | "🛒 4 lần mua sắm hôm nay, nghỉ tay chút nhé" |
 
-**Anti-Spam Rules**:
-- Max 2 nudges per day
-- No duplicate nudge types within 24 hours
-- Respect user's `nudge_frequency` preference
+**Telegram commands** (Phase 3.1):
+
+| Command | Nudge type fired |
+|---|---|
+| `/nudge` | `spending_alert` (default) |
+| `/nudge spending` | `spending_alert` |
+| `/nudge budget` | `budget_warning` |
+| `/nudge goal` | `goal_progress` |
+| `/nudge streak` | `saving_streak` |
+| `/nudge sub` | `subscription_reminder` |
+| `/nudge impulse` | `impulse_detection` |
+| `/start` | Welcome message |
+| `/help` | Command list |
+
+**Anti-spam rules** (configurable via `.env`):
+
+| Rule | Default | Env var |
+|---|---|---|
+| Max nudges per day | 2 | `NUDGE_MAX_PER_DAY` |
+| No duplicate type in 24 h | true | — |
+| Quiet hours (local time) | 22:00 – 07:00 | `NUDGE_QUIET_HOUR_START/END` |
+| User can disable | `nudge_frequency: off` in profile | — |
 
 ---
 
@@ -205,16 +215,16 @@ flowchart TD
 | Property | Value |
 |---|---|
 | **File** | `src/agents/reporting.py` |
-| **LLM** | Gemini 2.5 Pro |
+| **LLM** | Gemini 2.5 Flash |
 | **Trigger** | Scheduled cron (weekly) or user request |
 | **Input** | Transaction aggregates from MongoDB |
-| **Output** | Formatted report + Mini App data |
+| **Output** | Formatted narrative report via Telegram |
 
 **Responsibilities**:
 - Generate periodic financial summaries (daily/weekly/monthly)
 - Produce narrative insights, not just numbers
 - Identify spending trends and forecast future patterns
-- Cache reports in MongoDB for Mini App dashboard access
+- Cache reports in MongoDB (available for future Android dashboard app)
 
 **Report Types**:
 

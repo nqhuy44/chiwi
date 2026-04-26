@@ -30,6 +30,7 @@ class AnalyticsAgent:
         request: AnalysisRequest,
         current_transactions: list[dict],
         comparison_transactions: list[dict] | None = None,
+        user_timezone: str = "Asia/Ho_Chi_Minh",
     ) -> dict:
         """Run the requested analysis and return a narrative result."""
         logger.info(
@@ -47,7 +48,7 @@ class AnalyticsAgent:
         )
 
         user_msg = self._build_user_message(
-            request, current_summary, comparison_summary
+            request, current_summary, comparison_summary, user_timezone
         )
 
         result = await self._gemini.call_pro(SYSTEM_PROMPT, user_msg)
@@ -96,11 +97,13 @@ class AnalyticsAgent:
         request: AnalysisRequest,
         current: dict,
         comparison: dict | None,
+        user_timezone: str = "Asia/Ho_Chi_Minh",
     ) -> str:
         """Build the user message for the LLM based on analysis type."""
         payload: dict = {
             "analysis_type": request.analysis_type,
             "current_period": request.period,
+            "user_timezone": user_timezone,
             "current": self._period_block(current),
         }
         if comparison:
@@ -110,8 +113,7 @@ class AnalyticsAgent:
             payload["category_filter"] = request.category_filter
 
         return (
-            to_toon(payload)
-            + "\n\nHãy phân tích chi tiết, thân thiện bằng tiếng Việt."
+            to_toon(payload) + "\n\nHãy phân tích chi tiết, thân thiện bằng tiếng Việt."
         )
 
     @staticmethod

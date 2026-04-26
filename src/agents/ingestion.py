@@ -1,12 +1,14 @@
 """
 Ingestion Agent (The Collector)
 
-Parses raw bank notification text into structured transaction data
-using Gemini 2.5 Flash. Handles diverse Vietnamese bank formats.
+Receives raw bank notification text forwarded from the Android app and
+parses it into a structured ParsedTransaction. All AI parsing lives here
+so the logic can be improved server-side without a mobile release.
+
+Uses Gemini 2.5 Flash (cheap, deterministic extraction).
 """
 
 import logging
-from datetime import datetime
 
 from src.agents.prompts import load_prompt
 from src.api.middleware.pii_mask import mask_pii
@@ -20,44 +22,25 @@ SYSTEM_PROMPT = load_prompt("ingestion")
 
 
 class IngestionAgent:
-    """Parses bank notifications into structured transactions."""
+    """Parses raw bank notification text into a structured transaction."""
 
     def __init__(self, gemini: GeminiService) -> None:
         self._gemini = gemini
 
-    async def parse(self, raw_text: str) -> ParsedTransaction:
-        """Parse a raw bank notification into structured data.
+    async def parse(self, raw_text: str, bank_hint: str | None = None) -> ParsedTransaction:
+        """Extract structured financial data from a raw notification string."""
+        logger.info("Parsing notification text (len=%d)", len(raw_text))
 
-        PII is masked before sending to the LLM.
-        """
-        masked_text = mask_pii(raw_text) if settings.pii_mask_enabled else raw_text
-        logger.info("Parsing notification (%d chars)", len(raw_text))
+        masked = mask_pii(raw_text) if settings.pii_mask_enabled else raw_text
 
-        result = await self._gemini.call_flash(SYSTEM_PROMPT, masked_text)
+        user_msg = f"Notification text: {masked}"
+        if bank_hint:
+            user_msg += f"\nBank hint: {bank_hint}"
+
+        result = await self._gemini.call_flash(SYSTEM_PROMPT, user_msg)
 
         if not result:
-            logger.warning("Gemini returned empty result, treating as non-transaction")
+            logger.warning("Gemini returned empty result for ingestion")
             return ParsedTransaction(is_transaction=False, raw_text=raw_text)
 
-        # Parse transaction_time if present
-        txn_time = None
-        if result.get("transaction_time"):
-            try:
-                txn_time = datetime.fromisoformat(result["transaction_time"])
-            except (ValueError, TypeError):
-                logger.warning(
-                    "Could not parse transaction_time: %s",
-                    result.get("transaction_time"),
-                )
-
-        return ParsedTransaction(
-            is_transaction=result.get("is_transaction", False),
-            amount=result.get("amount"),
-            currency=result.get("currency", "VND"),
-            direction=result.get("direction"),
-            merchant_name=result.get("merchant_name"),
-            transaction_time=txn_time,
-            bank_name=result.get("bank_name"),
-            raw_text=raw_text,
-            confidence=result.get("confidence", "low"),
-        )
+        return ParsedTransaction(raw_text=raw_text, **result)

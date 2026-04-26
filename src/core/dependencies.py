@@ -11,9 +11,11 @@ from dataclasses import dataclass, field
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
 from src.core.config import settings
-from src.db.repositories.budget_repo import BudgetRepository
+from src.db.repositories.budget_repo import BudgetEventRepository, BudgetRepository
 from src.db.repositories.correction_repo import CorrectionRepository
 from src.db.repositories.goal_repo import GoalRepository
+from src.db.repositories.nudge_repo import NudgeRepository
+from src.db.repositories.subscription_repo import SubscriptionRepository
 from src.db.repositories.transaction_repo import TransactionRepository
 from src.db.repositories.user_repo import UserRepository
 from src.services.gemini import GeminiService
@@ -40,8 +42,11 @@ class AppContainer:
     transaction_repo: TransactionRepository | None = None
     user_repo: UserRepository | None = None
     budget_repo: BudgetRepository | None = None
+    budget_event_repo: BudgetEventRepository | None = None
     goal_repo: GoalRepository | None = None
     correction_repo: CorrectionRepository | None = None
+    nudge_repo: NudgeRepository | None = None
+    subscription_repo: SubscriptionRepository | None = None
 
     # Orchestrator (initialized after all services are ready)
     _orchestrator: object | None = None
@@ -61,8 +66,11 @@ class AppContainer:
         self.transaction_repo = TransactionRepository(self.db)
         self.user_repo = UserRepository(self.db)
         self.budget_repo = BudgetRepository(self.db)
+        self.budget_event_repo = BudgetEventRepository(self.db)
         self.goal_repo = GoalRepository(self.db)
         self.correction_repo = CorrectionRepository(self.db)
+        self.nudge_repo = NudgeRepository(self.db)
+        self.subscription_repo = SubscriptionRepository(self.db)
 
         # Redis
         await self.redis.connect()
@@ -76,10 +84,14 @@ class AppContainer:
         self._orchestrator = Orchestrator(
             gemini=self.gemini,
             redis=self.redis,
+            telegram=self.telegram,
             transaction_repo=self.transaction_repo,
             budget_repo=self.budget_repo,
+            budget_event_repo=self.budget_event_repo,
             goal_repo=self.goal_repo,
             correction_repo=self.correction_repo,
+            nudge_repo=self.nudge_repo,
+            subscription_repo=self.subscription_repo,
         )
         logger.info("All services initialized")
 

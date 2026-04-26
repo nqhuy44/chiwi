@@ -106,19 +106,21 @@ Primary user record linked to Telegram identity.
 
 ---
 
-### `user_profiles`
+### `user_profiles` (config-driven)
 
-Extended user context consumed by the Behavioral Agent.
+> **Stored in `config/user_profiles.json`**, not MongoDB. Edit the file to change personalisation without redeploying. Keyed by `telegram_user_id`. A `"default"` key provides fallback for unconfigured users. Keys starting with `_` are treated as comments and ignored by the loader.
 
 | Field | Type | Description |
 |---|---|---|
-| `user_id` | ObjectId | FK → `users` (unique) |
-| `occupation` | string | e.g., "DevOps Engineer" |
+| `chat_id` | string | Telegram chat ID for delivering nudges |
+| `timezone` | string | IANA timezone (e.g. `"Asia/Ho_Chi_Minh"`). Drives day-boundary math and LLM date formatting. Storage is always UTC. |
+| `occupation` | string | e.g., `"Senior DevOps Engineer"` |
 | `hobbies` | list | e.g., `["film_photography", "coffee"]` |
-| `financial_goals` | dict | Target amounts per goal |
-| `monthly_income` | float | Estimated monthly income |
-| `currency` | string | Default: "VND" |
-| `preferences` | dict | Nudge frequency, report day, language |
+| `interests` | list | For analogy generation, e.g., `["Kodak Portra 400"]` |
+| `communication_tone` | string | `friendly` / `playful` / `formal` / `concise` |
+| `nudge_frequency` | string | `daily` / `weekly` / `off` |
+| `language` | string | Default `"vi"` |
+| `extras` | dict | Free-form personalisation hints |
 
 ---
 
@@ -187,19 +189,63 @@ Spending limits per category per time period.
 
 ---
 
-### `nudges`
+### `subscriptions`
 
-Record of every proactive message sent by the Behavioral Agent.
+Registered recurring charges for reminder and auto-match tracking.
 
 | Field | Type | Description |
 |---|---|---|
-| `user_id` | ObjectId | FK → `users` |
-| `nudge_type` | string | `spending_alert`, `budget_exceeded`, `goal_progress`, `saving_streak`, `subscription_reminder` |
+| `user_id` | string | Telegram user ID |
+| `name` | string | Display name, e.g. "Netflix" |
+| `merchant_name` | string | Normalised merchant for transaction matching (case-insensitive regex) |
+| `amount` | float | Expected charge amount |
+| `currency` | string | e.g. "VND" |
+| `period` | string | `weekly` / `monthly` / `yearly` |
+| `next_charge_date` | datetime | Next expected charge date (UTC). Automatically advanced by one period on each charge. |
+| `last_charged_at` | datetime | When the last charge was recorded (UTC) |
+| `is_active` | bool | `false` = soft-deleted |
+| `source` | string | `manual` (user-registered via chat) or `auto_detected` (future: detected from pattern) |
+| `created_at` | datetime | Record creation timestamp (UTC) |
+
+**Indexes**: `user_id` + `is_active`, `user_id` + `merchant_name` + `is_active` (matching), `user_id` + `next_charge_date` (reminder queries)
+
+**Lifecycle**:
+- Created via `set_subscription` chat intent or future auto-detection.
+- `next_charge_date` advances by one period when: (a) an incoming transaction matches the merchant, or (b) user says "Netflix đã trả rồi" (`mark_subscription_paid`).
+- Worker queries `find_upcoming(within_hours=48)` to fire `subscription_reminder` nudges.
+
+---
+
+### `nudges`
+
+Record of every proactive message sent by the Behavioral Agent. Also drives anti-spam checks (daily count, 24 h dedup by type).
+
+| Field | Type | Description |
+|---|---|---|
+| `user_id` | string | Telegram user ID |
+| `nudge_type` | string | `spending_alert`, `budget_warning`, `budget_exceeded`, `goal_progress`, `saving_streak`, `subscription_reminder`, `impulse_detection` |
 | `message` | string | The nudge text sent to user |
 | `trigger_reason` | string | Why this nudge was triggered |
 | `was_read` | bool | Whether user saw it |
 | `user_acted` | bool | Whether user changed behavior |
-| `sent_at` | datetime | When sent |
+| `sent_at` | datetime | When sent (UTC) |
+
+**Indexes**: `user_id` + `sent_at`, `user_id` + `nudge_type` + `sent_at` (anti-spam queries)
+
+---
+
+### `corrections`
+
+Audit trail for user category corrections; also powers Tagging Agent learning.
+
+| Field | Type | Description |
+|---|---|---|
+| `user_id` | string | Telegram user ID |
+| `transaction_id` | string | FK → `transactions._id` |
+| `merchant_name` | string | Merchant affected |
+| `old_category` | string | Category before correction |
+| `new_category` | string | Category after correction |
+| `corrected_at` | datetime | When the correction was made (UTC) |
 
 ---
 
@@ -224,11 +270,9 @@ All keys prefixed with `chiwi:`.
 | Key Pattern | Type | TTL | Purpose |
 |---|---|---|---|
 | `chiwi:session:{chat_id}` | Hash | 30 min | Conversation state & context |
-| `chiwi:agent_state:{chat_id}` | JSON | 10 min | LangGraph agent checkpoint |
-| `chiwi:rate_limit:{user_id}` | Counter | 1 min | API rate limiting |
-| `chiwi:pending_confirm:{txn_id}` | Hash | 5 min | Transaction awaiting confirmation |
-| `chiwi:daily_stats:{user_id}:{date}` | Hash | 24 hr | Cached daily spending |
-| `chiwi:merchant_cache:{merchant}` | String | 7 days | Merchant → category cache |
+| `chiwi:rate_limit:{chat_id}` | Counter | 1 min | Per-user API rate limiting |
+| `chiwi:telegram:update:{update_id}` | String | 5 min | Dedup Telegram webhook updates |
+| `chiwi:merchant_cache:{merchant}` | String | 7 days | Merchant → category hot cache (invalidated on correction) |
 
 ## Migration Strategy
 

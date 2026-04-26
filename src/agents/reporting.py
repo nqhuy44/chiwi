@@ -24,7 +24,12 @@ class ReportingAgent:
     def __init__(self, gemini: GeminiService) -> None:
         self._gemini = gemini
 
-    async def generate(self, request: ReportRequest, transactions: list[dict]) -> dict:
+    async def generate(
+        self,
+        request: ReportRequest,
+        transactions: list[dict],
+        user_timezone: str = "Asia/Ho_Chi_Minh",
+    ) -> dict:
         """Generate a financial report for the given period."""
         logger.info(
             "Generating %s report for user_id=%s, period=%s with %d transactions",
@@ -34,12 +39,17 @@ class ReportingAgent:
             len(transactions),
         )
 
-        total_outflow = sum(t.get("amount", 0) for t in transactions if t.get("direction") == "outflow")
-        total_inflow = sum(t.get("amount", 0) for t in transactions if t.get("direction") == "inflow")
+        total_outflow = sum(
+            t.get("amount", 0) for t in transactions if t.get("direction") == "outflow"
+        )
+        total_inflow = sum(
+            t.get("amount", 0) for t in transactions if t.get("direction") == "inflow"
+        )
 
         payload: dict = {
             "report_type": request.report_type,
             "period": request.period,
+            "user_timezone": user_timezone,
             "total_inflow": round(total_inflow),
             "total_outflow": round(total_outflow),
         }
@@ -69,7 +79,7 @@ class ReportingAgent:
             "data": {
                 "total_inflow": total_inflow,
                 "total_outflow": total_outflow,
-                "transaction_count": len(transactions)
+                "transaction_count": len(transactions),
             },
             "status": "success",
             "report_text": report_text,

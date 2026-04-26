@@ -80,3 +80,27 @@ class TransactionRepository:
             },
         )
         return result.modified_count > 0
+
+    async def set_subscription_id(
+        self, transaction_id: str, subscription_id: str
+    ) -> bool:
+        from bson import ObjectId
+
+        result = await self.collection.update_one(
+            {"_id": ObjectId(transaction_id)},
+            {"$set": {"subscription_id": subscription_id}},
+        )
+        return result.modified_count > 0
+
+    async def find_by_subscription(
+        self, user_id: str, subscription_id: str, limit: int = 50
+    ) -> list[dict]:
+        """All transactions linked to a specific subscription, newest first."""
+        cursor = (
+            self.collection.find(
+                {"user_id": user_id, "subscription_id": subscription_id}
+            )
+            .sort("transaction_time", -1)
+            .limit(limit)
+        )
+        return await cursor.to_list(length=limit)

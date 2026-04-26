@@ -21,10 +21,9 @@ The system follows a **"Think-First"** strategy: an orchestrator identifies the 
 ```mermaid
 graph TD
     subgraph Input Layer
-        A1["📱 Android Notification<br/>(MacroDroid/Tasker)"]
-        A2["📱 iOS Shortcut<br/>(SMS Automation)"]
-        A3["💬 Telegram Chat<br/>(Direct Message)"]
-        A4["🎤 Voice Message<br/>(Speech-to-Text)"]
+        A1["📱 Android App<br/>(Captures raw notification text)"]
+        A2["💬 Telegram Chat<br/>(Direct Message)"]
+        A3["🎤 Voice Message<br/>(Speech-to-Text via Telegram)"]
     end
 
     subgraph API Gateway
@@ -32,7 +31,7 @@ graph TD
     end
 
     subgraph Orchestration Layer
-        C{"🧠 Agent Orchestrator<br/>(LangGraph)"}
+        C{"🧠 Agent Orchestrator<br/>(Think-First, plain async)"}
     end
 
     subgraph Agent Swarm
@@ -51,11 +50,11 @@ graph TD
 
     subgraph Output Layer
         K["📲 Telegram Bot<br/>(Notifications + Inline Buttons)"]
-        L["📈 Telegram Mini App<br/>(Dashboard Charts)"]
+        L["📈 Dashboard<br/>(Android app — separate repo)"]
     end
 
-    A1 & A2 --> B
-    A3 & A4 --> B
+    A1 -->|POST /api/webhook/notification raw_text| B
+    A2 & A3 --> B
     B --> C
     C --> D & E
     D & E --> F
@@ -64,15 +63,18 @@ graph TD
     G --> K
     I --> H
     I --> I2
-    H --> L
+    H --> K
     I2 --> K
+    I -.->|future| L
     C <--> J
 ```
 
 ## Component Responsibilities
 
 ### 1. Input Layer
-Captures financial events from multiple sources (bank notifications, direct chat, voice) and forwards them as structured HTTP requests to the API Gateway.
+Two active input channels:
+- **Telegram chat / voice** — direct messages and voice notes processed by the Conversational Agent.
+- **Android app** (separate repository) — captures raw bank notification text natively (NotificationListenerService) and forwards it verbatim to `POST /api/webhook/notification`. All AI parsing (Ingestion Agent, Gemini Flash) happens server-side so parsing improvements never require a mobile release. The Android app is responsible only for: notification capture, auth header injection, local offline queue (retry when backend unreachable), and future visualization.
 
 ### 2. API Gateway (FastAPI)
 - **Authentication**: Validates Telegram `user_id` / `chat_id` against an allow-list.
@@ -80,12 +82,12 @@ Captures financial events from multiple sources (bank notifications, direct chat
 - **Rate Limiting**: Protects against abuse and controls API cost.
 - **Routing**: Dispatches incoming events to the Agent Orchestrator.
 
-### 3. Agent Orchestrator (LangGraph)
-The central brain that implements a **"Think-First"** routing pattern:
+### 3. Agent Orchestrator
+The central brain that implements a **"Think-First"** routing pattern using plain async dispatch (not LangGraph):
 1. Classifies the incoming event type (notification, chat message, voice, scheduled trigger).
 2. Selects the appropriate agent pipeline.
 3. Manages multi-agent collaboration and data handoff.
-4. Handles conversation state via Redis.
+4. Loads the user's profile timezone for correct day-boundary calculations.
 
 ### 4. Agent Swarm
 Six specialized agents, each with a distinct system prompt and toolset. See [AGENTS.md](./AGENTS.md) for full documentation.
@@ -96,7 +98,9 @@ Six specialized agents, each with a distinct system prompt and toolset. See [AGE
 
 ### 6. Output Layer
 - **Telegram Bot**: Primary user interface for confirmations, nudges, and quick interactions via inline buttons.
-- **Telegram Mini App**: Rich visual dashboard with charts and reports for deeper financial insights.
+- **Android App** (separate repository, in development): Two roles —
+  1. **Notification capture** (active): `NotificationListenerService` forwards raw bank notification text to `POST /api/webhook/notification`. All AI parsing stays on the backend.
+  2. **Visual dashboard** (planned): Charts, drill-downs, and transaction history views. This repo exposes the data via the existing MongoDB/REST layer; the Android app consumes it.
 
 ## Deployment Architecture
 
@@ -130,29 +134,41 @@ chiwi/
 │   │   ├── tagging.py
 │   │   ├── behavioral.py
 │   │   ├── reporting.py
-│   │   └── analytics.py
+│   │   ├── analytics.py
+│   │   └── prompts/      # System prompt .md files (one per agent)
 │   ├── api/              # FastAPI endpoints
 │   │   ├── routes/
-│   │   │   ├── webhook.py
-│   │   │   ├── chat.py
+│   │   │   ├── webhook.py  # Bank notification + Telegram bot commands
 │   │   │   └── health.py
 │   │   └── middleware/
-│   │       ├── auth.py
 │   │       └── pii_mask.py
 │   ├── core/             # Orchestrator and shared utilities
 │   │   ├── orchestrator.py
 │   │   ├── config.py
-│   │   └── schemas.py
+│   │   ├── schemas.py
+│   │   ├── profiles.py   # User profile loader (config/user_profiles.json)
+│   │   ├── categories.py # Category loader (config/categories.json)
+│   │   ├── toon.py       # Token-optimised context encoder for LLM payloads
+│   │   ├── utils.py      # Timezone-aware date-range helpers
+│   │   └── dependencies.py
 │   ├── db/               # Database models and repositories
 │   │   ├── models/
+│   │   │   ├── transaction.py, budget.py, goal.py, nudge.py
+│   │   │   ├── subscription.py   # Recurring charge tracking
+│   │   │   ├── correction.py, report.py, category.py, user.py
 │   │   └── repositories/
+│   │       ├── transaction_repo.py, budget_repo.py, goal_repo.py
+│   │       ├── nudge_repo.py, correction_repo.py, user_repo.py
+│   │       └── subscription_repo.py  # insert, find_by_merchant, find_upcoming, mark_charged
 │   ├── services/         # External service integrations
 │   │   ├── telegram.py
 │   │   ├── gemini.py
 │   │   └── redis_client.py
-│   └── main.py           # Application entrypoint
-├── scripts/
-│   └── setup.sh
+│   ├── main.py           # FastAPI entrypoint
+│   └── worker.py         # Scheduled cron worker (behavioral, reports)
+├── config/
+│   ├── categories.json   # Spending categories (edit to add/rename)
+│   └── user_profiles.json # Per-user personalisation profiles (edit to configure)
 ├── tests/
 ├── docs/
 ├── docker-compose.yaml
