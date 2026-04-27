@@ -66,7 +66,53 @@ def get_date_range(
         _, end = _local_day_bounds(end_of_last_month, tz)
         return start, end
 
+    if period == "yesterday":
+        yesterday = today - timedelta(days=1)
+        return _local_day_bounds(yesterday, tz)
+
     return None, None
+
+
+def parse_custom_range(
+    start_iso: str | None,
+    end_iso: str | None,
+    timezone: str | None = None,
+) -> Tuple[datetime | None, datetime | None]:
+    """Parse ISO8601 start/end strings (from LLM) into a UTC datetime pair.
+
+    Strings without tzinfo are interpreted in the user/business timezone.
+    Returns (None, None) on any parse failure.
+    """
+    tz = _resolve_tz(timezone)
+
+    def _parse(s: str | None) -> datetime | None:
+        if not s:
+            return None
+        try:
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=tz)
+            return dt.astimezone(UTC).replace(tzinfo=None)
+        except (ValueError, TypeError):
+            return None
+
+    return _parse(start_iso), _parse(end_iso)
+
+
+def resolve_date_range(
+    period: str,
+    start_iso: str | None = None,
+    end_iso: str | None = None,
+    timezone: str | None = None,
+) -> Tuple[datetime | None, datetime | None]:
+    """Resolve any period label or custom ISO range to (start_utc, end_utc).
+
+    Use this as the single entry-point in handlers instead of calling
+    get_date_range + parse_custom_range separately.
+    """
+    if period == "custom":
+        return parse_custom_range(start_iso, end_iso, timezone)
+    return get_date_range(period, timezone)
 
 
 def get_budget_window(

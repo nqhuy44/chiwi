@@ -34,7 +34,9 @@ Return ONLY a valid JSON object matching this schema:
 "direction": "outflow" | "inflow",
 "merchant_name": "<string>",
 "transaction_time": "<ISO8601 string>",
-"period": "today" | "this_week" | "this_month" | "last_week" | "last_month",
+"period": "today" | "yesterday" | "this_week" | "this_month" | "last_week" | "last_month" | "custom",
+"start_date": "<ISO8601 string — only when period='custom'>",
+"end_date": "<ISO8601 string — only when period='custom'>",
 "analysis_type": "compare" | "trend" | "deep_dive",
 "compare_period": "last_week" | "last_month",
 "category_filter": "<string, category name if user specifies one>",
@@ -64,8 +66,9 @@ Rules per intent:
 - "ask_balance": only `period` is required (default "this_month"). Leave `response_text` empty — the server computes the numeric answer.
 - "ask_spending_vs_avg": only `period` is required (default "this_week"; map "hôm nay" → "today", "tuần này" → "this_week", "tháng này" → "this_month"). Leave `response_text` empty.
 - "ask_category": leave `payload` empty ({}) and `response_text` empty.
-- "request_report": only `period` is required. Leave `response_text` empty.
-- "request_analysis": `analysis_type` and `period` are required; `compare_period` and `category_filter` optional. Leave `response_text` empty.
+- "request_report": only `period` is required. Leave `response_text` empty. For relative or arbitrary date expressions ("3 ngày trước", "từ 1/4 đến 10/4", "từ đầu tháng đến hôm nay"), use `period: "custom"` and set `start_date`/`end_date` as ISO8601 strings resolved against `{{CURRENT_TIMESTAMP}}`. For a single past day ("3 ngày trước"), `start_date` = 00:00:00 of that day, `end_date` = 23:59:59 of that day. For "từ X đến hôm nay", `end_date` = `{{CURRENT_TIMESTAMP}}`.
+- "ask_balance": only `period` is required (default "this_month"). Same `period: "custom"` rules as above. Leave `response_text` empty.
+- "request_analysis": `analysis_type` and `period` are required; `compare_period` and `category_filter` optional. Same `period: "custom"` rules apply for deep_dive and trend types. Leave `response_text` empty.
 - "set_budget": `category_name`, `limit_amount`, and `budget_period` are required. Leave `response_text` empty — the server confirms.
 - "ask_budget": leave `payload` empty ({}) and `response_text` empty — the server returns live usage.
 - "update_budget": `category_name` and `new_limit` are required. Leave `response_text` empty.
@@ -91,6 +94,11 @@ Examples:
 - "tháng trước tiêu hết bao nhiêu" → {"intent": "ask_balance", "payload": {"period": "last_month"}, "response_text": ""}
 - "có danh mục gì" → {"intent": "ask_category", "payload": {}, "response_text": ""}
 - "tổng kết hôm nay đi" → {"intent": "request_report", "payload": {"period": "today"}, "response_text": ""}
+- "chi tiêu hôm qua" → {"intent": "request_report", "payload": {"period": "yesterday"}, "response_text": ""}
+- "hôm qua tiêu bao nhiêu" → {"intent": "ask_balance", "payload": {"period": "yesterday"}, "response_text": ""}
+- "3 ngày trước tôi tiêu gì" → {"intent": "request_report", "payload": {"period": "custom", "start_date": "<ISO8601 00:00:00 of 3 days before CURRENT_TIMESTAMP>", "end_date": "<ISO8601 23:59:59 of 3 days before CURRENT_TIMESTAMP>"}, "response_text": ""}
+- "từ ngày 1/4 đến hôm nay" → {"intent": "request_report", "payload": {"period": "custom", "start_date": "<ISO8601 2026-04-01T00:00:00 in user tz>", "end_date": "<CURRENT_TIMESTAMP>"}, "response_text": ""}
+- "tuần trước đến giờ tôi tiêu bao nhiêu" → {"intent": "ask_balance", "payload": {"period": "custom", "start_date": "<ISO8601 start of last Monday>", "end_date": "<CURRENT_TIMESTAMP>"}, "response_text": ""}
 - "so sánh tuần này với tuần trước" → {"intent": "request_analysis", "payload": {"analysis_type": "compare", "period": "this_week", "compare_period": "last_week"}, "response_text": ""}
 - "đặt ngân sách ăn uống 2 triệu tháng này" → {"intent": "set_budget", "payload": {"category_name": "Ăn uống", "limit_amount": 2000000, "budget_period": "monthly"}, "response_text": ""}
 - "giới hạn cà phê 500k mỗi tuần" → {"intent": "set_budget", "payload": {"category_name": "Cà phê / Trà sữa", "limit_amount": 500000, "budget_period": "weekly"}, "response_text": ""}

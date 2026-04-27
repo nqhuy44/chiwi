@@ -462,7 +462,7 @@ class Orchestrator:
 
     async def _handle_report(self, payload: dict) -> dict:
         """Reporting Agent -> Dashboard."""
-        from src.core.utils import get_date_range
+        from src.core.utils import resolve_date_range
 
         user_id = payload.get("user_id")
         period_str = payload.get("period", "today")
@@ -471,11 +471,13 @@ class Orchestrator:
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
 
-        start_date, end_date = get_date_range(period_str, timezone=user_tz)
+        start_date, end_date = resolve_date_range(
+            period_str, payload.get("start_date"), payload.get("end_date"), user_tz
+        )
         if not start_date:
             return {
                 "status": "error",
-                "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' đâu ạ. Bạn thử 'hôm nay', 'tuần này' hoặc 'tháng này' nhé!",
+                "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' đâu ạ. Bạn thử 'hôm nay', 'hôm qua', 'tuần này' hoặc 'tháng này' nhé!",
             }
 
         transactions = await self._transaction_repo.find_by_user(
@@ -493,7 +495,7 @@ class Orchestrator:
 
     async def _handle_analysis(self, payload: dict) -> dict:
         """Analytics Agent -> Complex analysis."""
-        from src.core.utils import get_comparison_ranges, get_date_range
+        from src.core.utils import get_comparison_ranges, resolve_date_range
 
         user_id = payload.get("user_id")
         analysis_type = payload.get("analysis_type", "compare")
@@ -501,6 +503,8 @@ class Orchestrator:
         compare_period = payload.get("compare_period")
         category_filter = payload.get("category_filter")
         user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
+        start_iso = payload.get("start_date")
+        end_iso = payload.get("end_date")
 
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
@@ -524,7 +528,7 @@ class Orchestrator:
                 user_id=user_id, start_date=comp_start, end_date=comp_end, limit=200
             )
         elif analysis_type == "deep_dive":
-            start_date, end_date = get_date_range(period_str, timezone=user_tz)
+            start_date, end_date = resolve_date_range(period_str, start_iso, end_iso, user_tz)
             if not start_date:
                 return {
                     "status": "error",
@@ -544,7 +548,7 @@ class Orchestrator:
 
         else:
             # Trend: fetch current period only
-            start_date, end_date = get_date_range(period_str, timezone=user_tz)
+            start_date, end_date = resolve_date_range(period_str, start_iso, end_iso, user_tz)
             if not start_date:
                 return {
                     "status": "error",
@@ -574,7 +578,7 @@ class Orchestrator:
 
     async def _handle_ask_balance(self, payload: dict) -> dict:
         """Compute net inflow/outflow for a period and format a Vietnamese reply."""
-        from src.core.utils import get_date_range
+        from src.core.utils import resolve_date_range
 
         user_id = payload.get("user_id")
         period_str = payload.get("period", "this_month")
@@ -583,7 +587,9 @@ class Orchestrator:
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
 
-        start_date, end_date = get_date_range(period_str, timezone=user_tz)
+        start_date, end_date = resolve_date_range(
+            period_str, payload.get("start_date"), payload.get("end_date"), user_tz
+        )
         if not start_date:
             return {
                 "status": "error",
@@ -607,12 +613,24 @@ class Orchestrator:
 
         period_labels = {
             "today": "hôm nay",
+            "yesterday": "hôm qua",
             "this_week": "tuần này",
             "this_month": "tháng này",
             "last_week": "tuần trước",
             "last_month": "tháng trước",
         }
-        period_label = period_labels.get(period_str, period_str)
+        if period_str == "custom":
+            from src.core.config import settings as _s
+            from zoneinfo import ZoneInfo as _ZI
+            _tz = _ZI(user_tz or _s.business_timezone)
+            _sd = start_date.replace(tzinfo=UTC).astimezone(_tz) if start_date else None
+            _ed = end_date.replace(tzinfo=UTC).astimezone(_tz) if end_date else None
+            period_label = (
+                f"từ {_sd.strftime('%d/%m/%Y')} đến {_ed.strftime('%d/%m/%Y')}"
+                if _sd and _ed else "khoảng thời gian đã chọn"
+            )
+        else:
+            period_label = period_labels.get(period_str, period_str)
 
         if not transactions:
             response = (
