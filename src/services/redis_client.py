@@ -2,6 +2,7 @@
 
 import json
 import logging
+import ssl
 
 from src.core.config import settings
 
@@ -27,11 +28,14 @@ class RedisClient:
 
             kwargs: dict = {"decode_responses": True}
             if settings.redis_url.startswith("rediss://"):
-                kwargs["ssl_cert_reqs"] = None
+                ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+                ctx.check_hostname = False
+                ctx.verify_mode = ssl.CERT_NONE
+                kwargs["ssl"] = ctx
 
             self._redis = redis.from_url(settings.redis_url, **kwargs)
             await self._redis.ping()
-            logger.info("Redis connected: %s", settings.redis_url)
+            logger.info("Redis connected successfully")
         except Exception:
             logger.exception("Redis connection failed — caching disabled")
             self._redis = None
