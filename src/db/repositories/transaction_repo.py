@@ -66,12 +66,12 @@ class TransactionRepository:
         return await cursor.to_list(length=limit)
 
     async def update_category(
-        self, transaction_id: str, category_id: str
+        self, transaction_id: str, category_id: str, user_id: str
     ) -> bool:
         from bson import ObjectId
 
         result = await self.collection.update_one(
-            {"_id": ObjectId(transaction_id)},
+            {"_id": ObjectId(transaction_id), "user_id": user_id},
             {
                 "$set": {
                     "category_id": category_id,

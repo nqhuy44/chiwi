@@ -56,16 +56,16 @@ class SubscriptionRepository:
         )
         return await cursor.to_list(length=50)
 
-    async def mark_charged(self, sub_id: str, charged_at: datetime) -> None:
+    async def mark_charged(self, sub_id: str, user_id: str, charged_at: datetime) -> None:
         """Advance next_charge_date by one period and record last_charged_at."""
-        sub = await self.collection.find_one({"_id": ObjectId(sub_id)})
+        sub = await self.collection.find_one({"_id": ObjectId(sub_id), "user_id": user_id})
         if not sub:
             return
         period = sub.get("period", "monthly")
         days = _PERIOD_DAYS.get(period, 30)
         next_date = sub["next_charge_date"] + timedelta(days=days)
         await self.collection.update_one(
-            {"_id": ObjectId(sub_id)},
+            {"_id": ObjectId(sub_id), "user_id": user_id},
             {"$set": {"last_charged_at": charged_at, "next_charge_date": next_date}},
         )
         logger.info("Subscription %s marked charged; next=%s", sub_id, next_date)
@@ -73,12 +73,13 @@ class SubscriptionRepository:
     async def deactivate(
         self,
         sub_id: str,
+        user_id: str,
         reason: str = "manual",
         cancelled_at: datetime | None = None,
     ) -> None:
         """Mark a subscription inactive and record why it was cancelled."""
         await self.collection.update_one(
-            {"_id": ObjectId(sub_id)},
+            {"_id": ObjectId(sub_id), "user_id": user_id},
             {
                 "$set": {
                     "is_active": False,

@@ -146,10 +146,11 @@ chiwi/
 │   │   ├── orchestrator.py
 │   │   ├── config.py
 │   │   ├── schemas.py
-│   │   ├── profiles.py   # User profile loader (config/user_profiles.json)
-│   │   ├── categories.py # Category loader (config/categories.json)
-│   │   ├── toon.py       # Token-optimised context encoder for LLM payloads
-│   │   ├── utils.py      # Timezone-aware date-range helpers
+│   │   ├── profiles.py     # User profile loader (config/user_profiles.json)
+│   │   ├── categories.py   # Category loader (config/categories.json)
+│   │   ├── toon.py         # Token-optimised context encoder for LLM payloads
+│   │   ├── utils.py        # Timezone-aware date-range helpers
+│   │   ├── spending_avg.py # Per-category baseline averages (ask_spending_vs_avg + spike detection)
 │   │   └── dependencies.py
 │   ├── db/               # Database models and repositories
 │   │   ├── models/
@@ -165,7 +166,7 @@ chiwi/
 │   │   ├── gemini.py
 │   │   └── redis_client.py
 │   ├── main.py           # FastAPI entrypoint
-│   └── worker.py         # Scheduled cron worker (behavioral, reports)
+│   └── worker.py         # Scheduled cron worker (behavioral nudges, budget/spending/goal trigger detection)
 ├── config/
 │   ├── categories.json   # Spending categories (edit to add/rename)
 │   └── user_profiles.json # Per-user personalisation profiles (edit to configure)

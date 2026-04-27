@@ -24,22 +24,44 @@ _NUDGE_TYPES = {
 _DEFAULT_NUDGE_TYPE = "spending_alert"
 
 _HELP_TEXT = (
-    "📋 <b>Các lệnh ChiWi hỗ trợ:</b>\n\n"
-    "/nudge — Gửi nudge chi tiêu mặc định (spending_alert)\n"
-    "/nudge spending — Cảnh báo chi tiêu bất thường\n"
+    "📋 <b>ChiWi (Mai) hỗ trợ:</b>\n\n"
+    "💬 <b>Nhắn tự nhiên (text hoặc voice):</b>\n"
+    "• Ghi chi: <i>\"Ăn phở 60k hôm qua\"</i>\n"
+    "• Ghi thu: <i>\"Nhận lương 10 triệu\"</i>\n"
+    "• Số dư: <i>\"Tháng này chi bao nhiêu?\"</i>\n"
+    "• So sánh TB: <i>\"Cafe tuần này so với bình thường?\"</i>\n"
+    "• Báo cáo: <i>\"Báo cáo tuần này\"</i>\n"
+    "• Phân tích: <i>\"So sánh tuần này với tuần trước\"</i>\n\n"
+    "💰 <b>Ngân sách:</b>\n"
+    "• <i>\"Đặt ngân sách ăn uống 3 triệu/tháng\"</i>\n"
+    "• <i>\"Ngân sách của mình thế nào?\"</i>\n"
+    "• <i>\"Tăng ngân sách mua sắm lên 2 triệu\"</i>\n"
+    "• <i>\"Tăng tạm ngân sách 500k tháng này\"</i>\n"
+    "• <i>\"Tắt cảnh báo ngân sách cafe\"</i>\n"
+    "• <i>\"Xoá ngân sách ăn uống\"</i>\n\n"
+    "🎯 <b>Mục tiêu tiết kiệm:</b>\n"
+    "• <i>\"Mục tiêu tiết kiệm 20 triệu mua laptop\"</i>\n\n"
+    "🔄 <b>Phí định kỳ:</b>\n"
+    "• <i>\"Đăng ký Netflix 260k mỗi tháng\"</i>\n"
+    "• <i>\"Danh sách đăng ký của mình\"</i>\n"
+    "• <i>\"Netflix đã trả rồi\"</i>\n"
+    "• <i>\"Huỷ Netflix\"</i>\n"
+    "• <i>\"Netflix tăng giá lên 299k\"</i>\n\n"
+    "🔔 <b>Lệnh nudge:</b>\n"
+    "/nudge — Cảnh báo chi tiêu bất thường\n"
     "/nudge budget — Cảnh báo ngân sách\n"
-    "/nudge goal — Tiến độ mục tiêu tiết kiệm\n"
+    "/nudge goal — Tiến độ mục tiêu\n"
     "/nudge streak — Chuỗi ngày chi tốt\n"
     "/nudge sub — Nhắc phí định kỳ\n"
-    "/nudge impulse — Cảnh báo mua sắm bốc đồng\n"
-    "/help — Hiển thị danh sách lệnh này\n\n"
-    "Hoặc nhắn bất kỳ để nói chuyện với Mai 💬"
+    "/nudge impulse — Cảnh báo mua bốc đồng\n"
+    "/help — Danh sách này\n\n"
+    "✏️ Sau mỗi giao dịch được ghi, bấm <b>Sửa danh mục</b> nếu phân loại chưa đúng."
 )
 
 _START_TEXT = (
     "Chào bạn! Mình là <b>ChiWi (Mai)</b> 👋\n"
     "Mình giúp bạn theo dõi chi tiêu và gửi nhắc nhở thông minh.\n\n"
-    "Gõ /help để xem các lệnh, hoặc cứ nhắn tự nhiên nhé!"
+    "Gõ /help để xem các lệnh, hoặc cứ nhắn tự nhiên (chữ hoặc voice) nhé!"
 )
 
 
@@ -76,6 +98,89 @@ async def _spending_summary(user_id: str) -> dict:
         "transaction_count": len(txns),
         "top_categories": [{"cat": c, "total": round(v)} for c, v in top],
     }
+
+
+def _category_keyboard(txn_id: str) -> list[list[dict]]:
+    """Build a 2-column category selection keyboard for a given transaction."""
+    from src.core.categories import load_categories
+
+    categories = load_categories()
+    buttons = [
+        {"text": f"{cat.icon_emoji} {cat.name}", "callback_data": f"correct:{txn_id}:{cat.name}"}
+        for cat in categories
+    ]
+    # 2 buttons per row
+    rows = [buttons[i:i + 2] for i in range(0, len(buttons), 2)]
+    return rows
+
+
+async def _handle_callback_query(callback_query: dict) -> None:
+    """Dispatch inline button callbacks: show category picker or apply correction."""
+    cq_id = callback_query.get("id", "")
+    cq_data = callback_query.get("data", "")
+    message = callback_query.get("message", {})
+    chat_id = str(message.get("chat", {}).get("id", ""))
+    from_id = str(callback_query.get("from", {}).get("id", "")) or chat_id
+    message_id = message.get("message_id")
+
+    if not chat_id or not cq_data:
+        return
+
+    if (
+        chat_id not in settings.allowed_user_ids
+        and from_id not in settings.allowed_user_ids
+    ):
+        logger.warning("Unauthorized callback from chat_id=%s", chat_id)
+        return
+
+    telegram = container.telegram
+    orchestrator = container.orchestrator
+
+    if cq_data.startswith("cats:"):
+        txn_id = cq_data.split(":", 1)[1]
+        keyboard = _category_keyboard(txn_id)
+        await telegram.answer_callback_query(cq_id)
+        await telegram.edit_message_reply_markup(chat_id, message_id, keyboard)
+
+    elif cq_data.startswith("correct:"):
+        parts = cq_data.split(":", 2)
+        if len(parts) != 3:
+            await telegram.answer_callback_query(cq_id, text="Dữ liệu không hợp lệ.")
+            return
+        _, txn_id, new_category = parts
+        payload = {
+            "user_id": from_id,
+            "transaction_id": txn_id,
+            "new_category": new_category,
+            "source": "telegram_callback",
+        }
+        result = await orchestrator.route("correction", payload)
+        response_text = result.get("response_text", "✅ Đã cập nhật!")
+        await telegram.answer_callback_query(cq_id, text=response_text)
+        # Collapse the keyboard after correction
+        await telegram.edit_message_reply_markup(chat_id, message_id, keyboard=None)
+
+    elif cq_data.startswith("sub_reg|"):
+        parts = cq_data.split("|", 3)
+        if len(parts) != 4:
+            await telegram.answer_callback_query(cq_id, text="Dữ liệu không hợp lệ.")
+            return
+        _, merchant, amount_str, period = parts
+        try:
+            amount = float(amount_str)
+        except ValueError:
+            await telegram.answer_callback_query(cq_id, text="Dữ liệu không hợp lệ.")
+            return
+        result = await orchestrator.handle_subscription_register({
+            "user_id": from_id,
+            "name": merchant,
+            "merchant_name": merchant,
+            "amount": amount,
+            "period": period,
+        })
+        response_text = result.get("response_text", "✅ Đã đăng ký theo dõi!")
+        await telegram.answer_callback_query(cq_id, text=response_text[:200])
+        await telegram.edit_message_reply_markup(chat_id, message_id, keyboard=None)
 
 
 async def _handle_command(
@@ -178,6 +283,12 @@ async def telegram_webhook(update: dict) -> dict:
     update_id = update.get("update_id")
     logger.info("Telegram update received: %s", update_id)
 
+    # --- Inline button callback ---
+    callback_query = update.get("callback_query")
+    if callback_query:
+        await _handle_callback_query(callback_query)
+        return {"ok": True}
+
     message = update.get("message", {})
     if not message:
         return {"ok": True}
@@ -198,8 +309,9 @@ async def telegram_webhook(update: dict) -> dict:
     chat_id = str(message.get("chat", {}).get("id", ""))
     from_id = str(message.get("from", {}).get("id", "")) or chat_id
     text = message.get("text", "")
+    voice = message.get("voice")
 
-    if not chat_id or not text:
+    if not chat_id or (not text and not voice):
         return {"ok": True}
 
     if (
@@ -234,18 +346,50 @@ async def telegram_webhook(update: dict) -> dict:
             )
             return {"ok": True}
 
+    orchestrator = container.orchestrator
+    telegram_service = container.telegram
+
     # --- Command routing ---
-    if text.startswith("/"):
+    if text and text.startswith("/"):
         parts = text.split()
         command = parts[0].split("@")[0].lower()  # strip @botname suffix
         args = parts[1:]
         await _handle_command(command, args, chat_id, from_id)
         return {"ok": True}
 
-    # --- Conversational path ---
-    orchestrator = container.orchestrator
-    telegram_service = container.telegram
+    # --- Voice message ---
+    if voice:
+        file_id = voice.get("file_id", "")
+        mime_type = voice.get("mime_type", "audio/ogg")
+        audio_bytes = b""
+        try:
+            tg_file = await telegram_service.bot.get_file(file_id)
+            audio_bytes = bytes(await tg_file.download_as_bytearray())
+        except Exception:
+            logger.exception("Failed to download voice file_id=%s", file_id)
+            await telegram_service.send_message(
+                chat_id, "Xin lỗi, mình không tải được file âm thanh. Bạn thử nhắn chữ nhé?"
+            )
+            return {"ok": True}
 
+        payload = {
+            "source": "telegram_voice",
+            "audio_bytes": audio_bytes,
+            "audio_mime_type": mime_type,
+            "chat_id": chat_id,
+            "user_id": from_id,
+        }
+        result = await orchestrator.route("voice", payload)
+        response_text = result.get("response_text")
+        inline_keyboard = result.get("inline_keyboard")
+        if response_text:
+            if inline_keyboard:
+                await telegram_service.send_message_with_keyboard(chat_id, response_text, inline_keyboard)
+            else:
+                await telegram_service.send_message(chat_id, response_text)
+        return {"ok": True}
+
+    # --- Conversational path ---
     payload = {
         "source": "telegram",
         "message": text,
@@ -257,7 +401,11 @@ async def telegram_webhook(update: dict) -> dict:
     result = await orchestrator.route(event_type, payload)
 
     response_text = result.get("response_text")
+    inline_keyboard = result.get("inline_keyboard")
     if response_text:
-        await telegram_service.send_message(chat_id, response_text)
+        if inline_keyboard:
+            await telegram_service.send_message_with_keyboard(chat_id, response_text, inline_keyboard)
+        else:
+            await telegram_service.send_message(chat_id, response_text)
 
     return {"ok": True}

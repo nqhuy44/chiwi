@@ -176,16 +176,40 @@ System-defined and user-customizable spending categories.
 
 ### `budgets`
 
-Spending limits per category per time period.
+Spending limits per category per time period. Every mutation also writes an immutable record to `budget_events`.
 
 | Field | Type | Description |
 |---|---|---|
-| `user_id` | ObjectId | FK → `users` |
-| `category_id` | ObjectId | FK → `categories` |
-| `limit_amount` | float | Budget limit |
-| `period` | string | `weekly` / `monthly` |
-| `start_date` | datetime | Period start |
-| `end_date` | datetime | Period end |
+| `user_id` | string | Telegram user ID |
+| `category_id` | string | Stable category slug |
+| `limit_amount` | float | Base recurring limit |
+| `period` | string | `daily` / `weekly` / `monthly` |
+| `is_active` | bool | `false` = soft-deleted |
+| `created_at` | datetime | UTC |
+| `updated_at` | datetime\|null | Set when `limit_amount` changes |
+| `is_silenced` | bool | `true` = tracked but no alert nudges sent |
+| `silenced_at` | datetime\|null | When silencing was activated |
+| `temp_limit` | float\|null | Single-cycle limit override |
+| `temp_limit_expires_at` | datetime\|null | UTC expiry of the temp override |
+| `temp_limit_reason` | string\|null | User-provided reason for override |
+
+---
+
+### `budget_events`
+
+Immutable audit log of every user action on a budget. Never updated — only inserted. Used by Behavioral and Analytics agents to detect patterns (repeated silencing, frequent overrides, limit creep after payday).
+
+| Field | Type | Description |
+|---|---|---|
+| `user_id` | string | Telegram user ID |
+| `budget_id` | string | FK → `budgets._id` |
+| `category_id` | string | Stable category slug |
+| `event_type` | string | `created`, `limit_updated`, `temp_override_set`, `silenced`, `unsilenced`, `disabled`, `reactivated` |
+| `old_value` | dict | Snapshot of changed fields before mutation |
+| `new_value` | dict | Snapshot of changed fields after mutation |
+| `reason` | string\|null | User-provided context |
+| `triggered_by` | string | `user` / `system` |
+| `created_at` | datetime | UTC |
 
 ---
 
@@ -205,6 +229,8 @@ Registered recurring charges for reminder and auto-match tracking.
 | `last_charged_at` | datetime | When the last charge was recorded (UTC) |
 | `is_active` | bool | `false` = soft-deleted |
 | `source` | string | `manual` (user-registered via chat) or `auto_detected` (future: detected from pattern) |
+| `cancellation_reason` | string\|null | `"manual"` (user cancelled) or `"replaced"` (superseded by an update) |
+| `replaces_id` | string\|null | `_id` of the subscription this record supersedes (set by `update_subscription`) |
 | `created_at` | datetime | Record creation timestamp (UTC) |
 
 **Indexes**: `user_id` + `is_active`, `user_id` + `merchant_name` + `is_active` (matching), `user_id` + `next_charge_date` (reminder queries)
@@ -212,6 +238,7 @@ Registered recurring charges for reminder and auto-match tracking.
 **Lifecycle**:
 - Created via `set_subscription` chat intent or future auto-detection.
 - `next_charge_date` advances by one period when: (a) an incoming transaction matches the merchant, or (b) user says "Netflix đã trả rồi" (`mark_subscription_paid`).
+- **Update pattern** (`update_subscription`): the existing record is deactivated with `cancellation_reason="replaced"`, and a new record is inserted with `replaces_id` pointing to the old `_id`. This preserves full subscription history.
 - Worker queries `find_upcoming(within_hours=48)` to fire `subscription_reminder` nudges.
 
 ---

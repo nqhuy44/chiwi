@@ -92,11 +92,40 @@ class ConversationalAgent:
                 response_text="Xin lỗi, mình không hiểu ý bạn. Bạn có thể nói lại không?",
             )
 
-    async def process_voice(self, voice_file_url: str, chat_id: str) -> IntentResult:
-        """Process a voice message via speech-to-text then intent parsing."""
-        # TODO: Call Gemini Flash for STT, then Pro for intent
+    async def process_voice(
+        self,
+        audio_bytes: bytes,
+        audio_mime_type: str,
+        chat_id: str,
+        user_timezone: str | None = None,
+    ) -> IntentResult:
+        """Process a voice message via Gemini native audio STT + intent extraction."""
         logger.info("Processing voice from chat_id=%s", chat_id)
-        return IntentResult(
-            intent="general_chat",
-            response_text="Xin lỗi, mình chưa xử lý được tin nhắn thoại.",
-        )
+
+        if not audio_bytes:
+            return IntentResult(
+                intent="general_chat",
+                response_text="Xin lỗi, mình chưa nghe rõ. Bạn thử nhắn chữ nhé?",
+            )
+
+        tz = ZoneInfo(user_timezone or settings.business_timezone)
+        now_iso = datetime.now(tz).isoformat()
+        prompt = SYSTEM_PROMPT_TEMPLATE.replace("{{CURRENT_TIMESTAMP}}", now_iso)
+
+        result = await self._gemini.call_flash_with_audio(prompt, audio_bytes, audio_mime_type)
+
+        if not result:
+            logger.warning("Gemini returned empty JSON for voice parsing")
+            return IntentResult(
+                intent="general_chat",
+                response_text="Xin lỗi, mình chưa nghe rõ. Bạn thử nhắn chữ nhé?",
+            )
+
+        try:
+            return IntentResult(**result)
+        except ValidationError:
+            logger.warning("Invalid intent schema from voice: %s", result)
+            return IntentResult(
+                intent="general_chat",
+                response_text="Xin lỗi, mình không hiểu ý bạn. Bạn thử nhắn chữ nhé?",
+            )

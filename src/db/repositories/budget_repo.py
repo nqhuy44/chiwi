@@ -58,10 +58,11 @@ class BudgetRepository:
     async def update_limit(
         self,
         budget_id: str,
+        user_id: str,
         limit_amount: float,
     ) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(budget_id)},
+            {"_id": ObjectId(budget_id), "user_id": user_id},
             {"$set": {"limit_amount": limit_amount, "updated_at": datetime.now(UTC)}},
         )
         return result.modified_count > 0
@@ -69,12 +70,13 @@ class BudgetRepository:
     async def set_temp_override(
         self,
         budget_id: str,
+        user_id: str,
         temp_limit: float,
         expires_at: datetime,
         reason: str | None = None,
     ) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(budget_id)},
+            {"_id": ObjectId(budget_id), "user_id": user_id},
             {
                 "$set": {
                     "temp_limit": temp_limit,
@@ -85,37 +87,37 @@ class BudgetRepository:
         )
         return result.modified_count > 0
 
-    async def clear_temp_override(self, budget_id: str) -> bool:
+    async def clear_temp_override(self, budget_id: str, user_id: str) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(budget_id)},
+            {"_id": ObjectId(budget_id), "user_id": user_id},
             {"$set": {"temp_limit": None, "temp_limit_expires_at": None, "temp_limit_reason": None}},
         )
         return result.modified_count > 0
 
-    async def silence(self, budget_id: str) -> bool:
+    async def silence(self, budget_id: str, user_id: str) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(budget_id)},
+            {"_id": ObjectId(budget_id), "user_id": user_id},
             {"$set": {"is_silenced": True, "silenced_at": datetime.now(UTC)}},
         )
         return result.modified_count > 0
 
-    async def unsilence(self, budget_id: str) -> bool:
+    async def unsilence(self, budget_id: str, user_id: str) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(budget_id)},
+            {"_id": ObjectId(budget_id), "user_id": user_id},
             {"$set": {"is_silenced": False, "silenced_at": None}},
         )
         return result.modified_count > 0
 
-    async def deactivate(self, budget_id: str) -> bool:
+    async def deactivate(self, budget_id: str, user_id: str) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(budget_id)},
+            {"_id": ObjectId(budget_id), "user_id": user_id},
             {"$set": {"is_active": False, "updated_at": datetime.now(UTC)}},
         )
         return result.modified_count > 0
 
-    async def reactivate(self, budget_id: str) -> bool:
+    async def reactivate(self, budget_id: str, user_id: str) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(budget_id)},
+            {"_id": ObjectId(budget_id), "user_id": user_id},
             {"$set": {"is_active": True, "updated_at": datetime.now(UTC)}},
         )
         return result.modified_count > 0

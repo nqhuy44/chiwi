@@ -159,11 +159,24 @@ class Orchestrator:
         txn_id = await self._transaction_repo.insert(txn_doc)
         logger.info("Transaction stored from Android notification: %s", txn_id)
 
+        if txn_doc.direction == "inflow":
+            await self._update_goal_progress(user_id, txn_doc.amount)
+
         if chat_id and parsed.merchant_name:
             await self._check_subscription_match(
                 user_id, parsed.merchant_name, parsed.amount or 0.0,
                 parsed.transaction_time or datetime.now(UTC), chat_id, txn_id,
             )
+
+        if chat_id:
+            direction_icon = "➕" if txn_doc.direction == "inflow" else "➖"
+            amount_str = f"{txn_doc.amount:,.0f}"
+            category = tags_result.get("category_name", "Khác")
+            parts = [f"✅ {direction_icon} {amount_str}đ", category]
+            if parsed.merchant_name:
+                parts.append(parsed.merchant_name)
+            keyboard = [[{"text": "✏️ Sửa danh mục", "callback_data": f"cats:{txn_id}"}]]
+            await self._telegram.send_message_with_keyboard(chat_id, " | ".join(parts), keyboard)
 
         return {
             "status": "stored",
@@ -173,19 +186,28 @@ class Orchestrator:
 
     async def _handle_chat(self, payload: dict) -> dict:
         """Conversational Agent -> Tagging Agent -> Store."""
-        raw_text = payload.get("message", "")
         user_id = payload.get("user_id", "")
         chat_id = payload.get("chat_id", "")
-
-        if not raw_text:
-            return {"status": "empty_message"}
-
+        source = payload.get("source", "")
         user_tz = get_profile(user_id).timezone
 
-        # Step 1: Parse intent
-        intent_result = await self._conversational.process_message(
-            message=raw_text, chat_id=chat_id, user_timezone=user_tz
-        )
+        raw_text = payload.get("message", "")
+
+        # Step 1: Parse intent (text or voice)
+        if source == "telegram_voice":
+            audio_bytes = payload.get("audio_bytes", b"")
+            mime_type = payload.get("audio_mime_type", "audio/ogg")
+            if not audio_bytes:
+                return {"status": "error", "response_text": "Không nhận được file âm thanh."}
+            intent_result = await self._conversational.process_voice(
+                audio_bytes, mime_type, chat_id, user_timezone=user_tz
+            )
+        else:
+            if not raw_text:
+                return {"status": "empty_message"}
+            intent_result = await self._conversational.process_message(
+                message=raw_text, chat_id=chat_id, user_timezone=user_tz
+            )
 
         if intent_result.intent == "request_report":
             return await self._handle_report(
@@ -388,6 +410,9 @@ class Orchestrator:
         txn_id = await self._transaction_repo.insert(txn_doc)
         logger.info("Transaction stored via chat: %s", txn_id)
 
+        if txn_doc.direction == "inflow":
+            await self._update_goal_progress(user_id, txn_doc.amount)
+
         if parsed.merchant_name:
             await self._check_subscription_match(
                 user_id, parsed.merchant_name, parsed.amount or 0.0,
@@ -398,8 +423,8 @@ class Orchestrator:
             "status": "stored",
             "transaction_id": txn_id,
             "parsed": parsed.model_dump(),
-            "response_text": intent_result.response_text
-            or "Đã ghi nhận giao dịch của bạn!",
+            "response_text": intent_result.response_text or "Đã ghi nhận giao dịch của bạn!",
+            "inline_keyboard": [[{"text": "✏️ Sửa danh mục", "callback_data": f"cats:{txn_id}"}]],
         }
 
     async def _handle_scheduled(self, payload: dict) -> dict:
@@ -498,6 +523,25 @@ class Orchestrator:
             comparison_txns = await self._transaction_repo.find_by_user(
                 user_id=user_id, start_date=comp_start, end_date=comp_end, limit=200
             )
+        elif analysis_type == "deep_dive":
+            start_date, end_date = get_date_range(period_str, timezone=user_tz)
+            if not start_date:
+                return {
+                    "status": "error",
+                    "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' để phân tích chi tiết.",
+                }
+
+            current_txns = await self._transaction_repo.find_by_user(
+                user_id=user_id, start_date=start_date, end_date=end_date, limit=500
+            )
+            # Filter to the requested category when specified
+            if category_filter:
+                current_txns = [
+                    t for t in current_txns
+                    if (t.get("category_id") or "").lower() == category_filter.lower()
+                ]
+            comparison_txns = None
+
         else:
             # Trend: fetch current period only
             start_date, end_date = get_date_range(period_str, timezone=user_tz)
@@ -807,7 +851,7 @@ class Orchestrator:
 
         budget_id = str(budget["_id"])
         old_limit = budget.get("limit_amount", 0)
-        await self._budget_repo.update_limit(budget_id, float(new_limit))
+        await self._budget_repo.update_limit(budget_id, user_id, float(new_limit))
         await self._budget_event_repo.insert(BudgetEventDocument(
             user_id=user_id,
             budget_id=budget_id,
@@ -859,7 +903,7 @@ class Orchestrator:
 
         budget_id = str(budget["_id"])
         old_limit = budget.get("limit_amount", 0)
-        await self._budget_repo.set_temp_override(budget_id, float(temp_limit), expires_at, reason)
+        await self._budget_repo.set_temp_override(budget_id, user_id, float(temp_limit), expires_at, reason)
         await self._budget_event_repo.insert(BudgetEventDocument(
             user_id=user_id,
             budget_id=budget_id,
@@ -901,7 +945,7 @@ class Orchestrator:
             }
 
         budget_id = str(budget["_id"])
-        await self._budget_repo.silence(budget_id)
+        await self._budget_repo.silence(budget_id, user_id)
         await self._budget_event_repo.insert(BudgetEventDocument(
             user_id=user_id,
             budget_id=budget_id,
@@ -938,7 +982,7 @@ class Orchestrator:
             }
 
         budget_id = str(budget["_id"])
-        await self._budget_repo.deactivate(budget_id)
+        await self._budget_repo.deactivate(budget_id, user_id)
         await self._budget_event_repo.insert(BudgetEventDocument(
             user_id=user_id,
             budget_id=budget_id,
@@ -1122,7 +1166,7 @@ class Orchestrator:
             }
 
         sub_id = str(sub["_id"])
-        await self._subscription_repo.mark_charged(sub_id, datetime.now(UTC))
+        await self._subscription_repo.mark_charged(sub_id, user_id, datetime.now(UTC))
         next_date = sub.get("next_charge_date")
         from datetime import timedelta
         period = sub.get("period", "monthly")
@@ -1163,7 +1207,7 @@ class Orchestrator:
             }
 
         sub_id = str(sub["_id"])
-        await self._subscription_repo.deactivate(sub_id, reason="manual")
+        await self._subscription_repo.deactivate(sub_id, user_id, reason="manual")
         logger.info("Subscription '%s' cancelled by user %s", merchant_name, user_id)
         return {
             "status": "success",
@@ -1210,7 +1254,7 @@ class Orchestrator:
 
         old_sub_id = str(old_sub["_id"])
         now = datetime.now(UTC)
-        await self._subscription_repo.deactivate(old_sub_id, reason="replaced", cancelled_at=now)
+        await self._subscription_repo.deactivate(old_sub_id, user_id, reason="replaced", cancelled_at=now)
 
         period = new_period or old_sub.get("period", "monthly")
         next_charge: datetime | None = None
@@ -1270,7 +1314,7 @@ class Orchestrator:
         sub = await self._subscription_repo.find_by_merchant(user_id, merchant_name)
         if sub:
             sub_id = str(sub["_id"])
-            await self._subscription_repo.mark_charged(sub_id, charged_at)
+            await self._subscription_repo.mark_charged(sub_id, user_id, charged_at)
             if transaction_id:
                 await self._transaction_repo.set_subscription_id(transaction_id, sub_id)
             logger.info(
@@ -1283,21 +1327,47 @@ class Orchestrator:
             user_id, merchant_name, limit=5
         )
         if self._is_recurring_pattern(history, amount):
-            period_label = "tháng"  # default assumption for detected patterns
-            await self._telegram.send_message(
+            detected_period = self._detect_subscription_period(history)
+            period_label = {"weekly": "tuần", "monthly": "tháng", "yearly": "năm"}.get(
+                detected_period, "tháng"
+            )
+            # Encode merchant and amount in callback_data using | separator
+            safe_merchant = merchant_name.replace("|", "_")
+            keyboard = [[{
+                "text": "✅ Đăng ký theo dõi",
+                "callback_data": f"sub_reg|{safe_merchant}|{int(amount)}|{detected_period}",
+            }]]
+            await self._telegram.send_message_with_keyboard(
                 chat_id=chat_id,
                 text=(
                     f"🔄 <b>{merchant_name}</b> có vẻ là phí định kỳ "
                     f"({amount:,.0f}đ/{period_label}). "
-                    f"Đăng ký theo dõi để Mai nhắc trước kỳ trừ tiền không?\n\n"
-                    f"Nhắn <i>'đăng ký {merchant_name} {amount:,.0f}đ mỗi tháng'</i> để xác nhận."
+                    "Bấm nút để đăng ký và Mai sẽ nhắc trước kỳ trừ tiền!"
                 ),
+                keyboard=keyboard,
             )
             logger.info(
                 "Recurring pattern detected for '%s' user=%s — prompted user",
                 merchant_name,
                 user_id,
             )
+
+    @staticmethod
+    def _detect_subscription_period(history: list[dict]) -> str:
+        """Infer weekly / monthly / yearly from average interval between outflow charges."""
+        dates = sorted(
+            h["transaction_time"] for h in history
+            if h.get("direction") == "outflow" and h.get("transaction_time")
+        )
+        if len(dates) < 2:
+            return "monthly"
+        intervals = [(dates[i] - dates[i - 1]).days for i in range(1, len(dates))]
+        avg_days = sum(intervals) / len(intervals)
+        if avg_days <= 14:
+            return "weekly"
+        if avg_days <= 180:
+            return "monthly"
+        return "yearly"
 
     @staticmethod
     def _is_recurring_pattern(history: list[dict], current_amount: float) -> bool:
@@ -1355,11 +1425,23 @@ class Orchestrator:
                 "response_text": "Không tìm thấy giao dịch để sửa.",
             }
 
+        if original.get("user_id") != user_id:
+            logger.warning(
+                "Correction ownership violation: user=%s attempted to update txn=%s owned by %s",
+                user_id,
+                transaction_id,
+                original.get("user_id"),
+            )
+            return {
+                "status": "error",
+                "response_text": "Không tìm thấy giao dịch để sửa.",
+            }
+
         old_category = original.get("category_id")
         merchant_name = original.get("merchant_name")
 
         updated = await self._transaction_repo.update_category(
-            transaction_id, new_category
+            transaction_id, new_category, user_id
         )
         if not updated:
             return {
@@ -1398,3 +1480,21 @@ class Orchestrator:
                 "Mai sẽ nhớ cho lần sau."
             ),
         }
+
+    async def handle_subscription_register(self, payload: dict) -> dict:
+        """Public entry point for one-tap subscription registration from inline buttons."""
+        return await self._handle_set_subscription(payload)
+
+    async def _update_goal_progress(self, user_id: str, inflow_amount: float) -> None:
+        """Add an inflow amount to all active goals and mark achieved ones."""
+        try:
+            goals = await self._goal_repo.find_by_user(user_id, status="active")
+            for goal in goals:
+                goal_id = str(goal["_id"])
+                new_amount = goal.get("current_amount", 0.0) + inflow_amount
+                await self._goal_repo.update_progress(goal_id, user_id, new_amount)
+                if new_amount >= goal.get("target_amount", float("inf")):
+                    await self._goal_repo.set_status(goal_id, user_id, "achieved")
+                    logger.info("Goal %s achieved for user %s", goal_id, user_id)
+        except Exception:
+            logger.exception("Failed to update goal progress for user %s", user_id)

@@ -94,3 +94,37 @@ jobs:
             --region="${{ secrets.GCP_REGION }}" \
             --format='value(status.url)')
           echo "Deployed to: ${SERVICE_URL}"
+
+  deploy-workers:
+    name: Deploy worker jobs to Cloud Run
+    runs-on: ubuntu-latest
+    needs: build
+    environment: prod
+    permissions:
+      contents: read
+      id-token: write
+    strategy:
+      fail-fast: false
+      matrix:
+        job_name:
+          - chiwi-worker-behavioral
+          - chiwi-worker-reports
+          - chiwi-worker-budget
+
+    steps:
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Setup gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ secrets.GCP_PROJECT_ID }}
+
+      - name: Update Cloud Run Job ${{ matrix.job_name }}
+        run: |
+          gcloud run jobs update "${{ matrix.job_name }}" \
+            --image="${{ needs.build.outputs.image_sha }}" \
+            --region="${{ secrets.GCP_REGION }}" \
+            --quiet

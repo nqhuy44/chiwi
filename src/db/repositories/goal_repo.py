@@ -34,16 +34,16 @@ class GoalRepository:
         )
         return await cursor.to_list(length=50)
 
-    async def update_progress(self, goal_id: str, current_amount: float) -> bool:
+    async def update_progress(self, goal_id: str, user_id: str, current_amount: float) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(goal_id)},
+            {"_id": ObjectId(goal_id), "user_id": user_id},
             {"$set": {"current_amount": current_amount}},
         )
         return result.modified_count > 0
 
-    async def set_status(self, goal_id: str, status: GoalStatus) -> bool:
+    async def set_status(self, goal_id: str, user_id: str, status: GoalStatus) -> bool:
         result = await self.collection.update_one(
-            {"_id": ObjectId(goal_id)},
+            {"_id": ObjectId(goal_id), "user_id": user_id},
             {"$set": {"status": status}},
         )
         return result.modified_count > 0

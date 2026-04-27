@@ -6,17 +6,35 @@ from src.core.orchestrator import Orchestrator
 
 
 @pytest.fixture
-def orchestrator(mock_gemini, mock_redis, mock_transaction_repo):
+def orchestrator(
+    mock_gemini,
+    mock_redis,
+    mock_telegram,
+    mock_transaction_repo,
+    mock_budget_repo,
+    mock_budget_event_repo,
+    mock_goal_repo,
+    mock_correction_repo,
+    mock_nudge_repo,
+    mock_subscription_repo,
+):
     return Orchestrator(
         gemini=mock_gemini,
         redis=mock_redis,
+        telegram=mock_telegram,
         transaction_repo=mock_transaction_repo,
+        budget_repo=mock_budget_repo,
+        budget_event_repo=mock_budget_event_repo,
+        goal_repo=mock_goal_repo,
+        correction_repo=mock_correction_repo,
+        nudge_repo=mock_nudge_repo,
+        subscription_repo=mock_subscription_repo,
     )
 
 
 @pytest.mark.asyncio
 async def test_classify_notification_source(orchestrator):
-    event_type = await orchestrator.classify_event({"source": "macrodroid"})
+    event_type = await orchestrator.classify_event({"source": "android"})
     assert event_type == "notification"
 
 
@@ -47,8 +65,8 @@ async def test_notification_pipeline_stores_transaction(
     ]
 
     payload = {
-        "source": "tasker",
-        "notification_text": "TCB: -100,000VND tai GRAB. 14:30 20/10/24",
+        "source": "android",
+        "raw_text": "TCB: -100,000VND tai GRAB. 14:30 20/10/24",
         "user_id": "user_1",
     }
 
@@ -78,8 +96,8 @@ async def test_notification_skips_non_transaction(
     result = await orchestrator.route(
         "notification",
         {
-            "source": "macrodroid",
-            "notification_text": "VCB: OTP 123456",
+            "source": "android",
+            "raw_text": "VCB: OTP 123456",
             "user_id": "user_1",
         },
     )
@@ -93,7 +111,7 @@ async def test_notification_empty_text(orchestrator, mock_transaction_repo):
     """Empty notification_text returns empty status without LLM calls."""
     result = await orchestrator.route(
         "notification",
-        {"source": "macrodroid", "notification_text": "", "user_id": "u1"},
+        {"source": "android", "raw_text": "", "user_id": "u1"},
     )
 
     assert result["status"] == "empty_notification"
@@ -176,16 +194,14 @@ async def test_chat_pipeline_request_report(
     orchestrator, mock_gemini, mock_transaction_repo
 ):
     """End-to-end: request report generates summary."""
-    mock_gemini.call_pro.side_effect = [
-        {
-            "intent": "request_report",
-            "payload": {},
-            "response_text": ""
-        },
-        {
-            "report_text": "Báo cáo: Tổng chi 0 VND."
-        }
-    ]
+    mock_gemini.call_pro.return_value = {
+        "intent": "request_report",
+        "payload": {},
+        "response_text": ""
+    }
+    mock_gemini.call_flash.return_value = {
+        "report_text": "Báo cáo: Tổng chi 0 VND."
+    }
     mock_transaction_repo.find_by_user.return_value = []
 
     payload = {
@@ -200,4 +216,5 @@ async def test_chat_pipeline_request_report(
     assert result["status"] == "success"
     assert result["response_text"] == "Báo cáo: Tổng chi 0 VND."
     mock_transaction_repo.find_by_user.assert_called_once()
-    assert mock_gemini.call_pro.call_count == 2
+    mock_gemini.call_pro.assert_called_once()
+    mock_gemini.call_flash.assert_called_once()

@@ -53,6 +53,14 @@ class GeminiService:
             settings.gemini_model_pro, system_prompt, user_message, temperature=0.3
         )
 
+    async def call_flash_with_audio(
+        self, system_prompt: str, audio_bytes: bytes, audio_mime_type: str = "audio/ogg"
+    ) -> dict[str, Any]:
+        """Call Gemini Flash with an audio file for native STT + intent extraction."""
+        return await self._invoke_multimodal(
+            settings.gemini_model_flash, system_prompt, audio_bytes, audio_mime_type
+        )
+
     async def _invoke(
         self,
         model: str,
@@ -120,4 +128,61 @@ class GeminiService:
         logger.error(
             "Gemini %s: exhausted %d retries on rate limit", model, MAX_RETRIES
         )
+        return {}
+
+    async def _invoke_multimodal(
+        self,
+        model: str,
+        system_prompt: str,
+        audio_bytes: bytes,
+        audio_mime_type: str,
+    ) -> dict[str, Any]:
+        """Internal: invoke a model with audio inline data + forced JSON output."""
+        if self._client is None:
+            logger.error("Gemini client not initialized")
+            return {}
+
+        raw = ""
+        _safety = [
+            types.SafetySetting(category="HARM_CATEGORY_HARASSMENT", threshold="BLOCK_NONE"),
+            types.SafetySetting(category="HARM_CATEGORY_HATE_SPEECH", threshold="BLOCK_NONE"),
+        ]
+
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                audio_part = types.Part.from_bytes(data=audio_bytes, mime_type=audio_mime_type)
+                response = await self._client.aio.models.generate_content(
+                    model=model,
+                    contents=[audio_part],
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_prompt,
+                        temperature=0.1,
+                        response_mime_type="application/json",
+                        safety_settings=_safety,
+                    ),
+                )
+                raw = (response.text or "").strip()
+                return json.loads(raw) if raw else {}
+
+            except ClientError as exc:
+                if exc.code == 429:
+                    delay = BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+                    logger.warning(
+                        "Gemini %s audio rate-limited (429), retry %d/%d in %.1fs",
+                        model, attempt, MAX_RETRIES, delay,
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+                logger.exception("Gemini %s audio client error (%s)", model, exc.code)
+                return {}
+
+            except json.JSONDecodeError:
+                logger.error("Gemini %s audio returned non-JSON: %s", model, raw[:200])
+                return {}
+
+            except Exception:
+                logger.exception("Gemini %s audio call failed", model)
+                return {}
+
+        logger.error("Gemini %s audio: exhausted %d retries", model, MAX_RETRIES)
         return {}

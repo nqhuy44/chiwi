@@ -370,35 +370,121 @@ async def run_behavioral_analysis() -> None:
 
 
 async def run_weekly_reports() -> None:
-    """Weekly report generation for all users."""
-    # TODO: Phase 3 — query users, run ReportingAgent.generate()
-    logger.info("Running weekly report generation...")
+    """Weekly report generation for all profiled users.
+
+    Generates a last_week summary for each user and delivers it via Telegram.
+    Intended to be triggered by Cloud Scheduler every Monday 09:00.
+    """
+    user_ids = configured_user_ids()
+    if not user_ids:
+        logger.info("No user profiles configured — skipping weekly reports")
+        return
+
+    orchestrator = container.orchestrator
+    for user_id in user_ids:
+        profile = get_profile(user_id)
+        if not profile.chat_id:
+            logger.warning("Profile %s has no chat_id — cannot deliver report", user_id)
+            continue
+        try:
+            result = await orchestrator.route("report", {
+                "user_id": user_id,
+                "period": "last_week",
+                "user_timezone": profile.timezone,
+            })
+            report_text = result.get("response_text", "")
+            if report_text and result.get("status") != "error":
+                await container.telegram.send_message(profile.chat_id, report_text)
+            logger.info(
+                "Weekly report user=%s status=%s", user_id, result.get("status")
+            )
+        except Exception:
+            logger.exception("Weekly report failed for user_id=%s", user_id)
 
 
 async def run_budget_checks() -> None:
-    """Hourly budget threshold checks."""
-    # Budget triggers are now handled inside _collect_triggers via _budget_triggers.
-    logger.info("Running budget checks...")
+    """Hourly maintenance: clear expired temp overrides from all active budgets.
+
+    Budget threshold nudges (≥70%, ≥100%) are triggered via _collect_triggers
+    inside run_behavioral_analysis. This job handles only DB housekeeping.
+    """
+    budget_repo = container.budget_repo
+    if not budget_repo:
+        logger.warning("budget_repo not available — skipping budget checks")
+        return
+
+    user_ids = configured_user_ids()
+    now_utc = datetime.now(UTC).replace(tzinfo=None)
+    cleared = 0
+
+    for user_id in user_ids:
+        try:
+            budgets = await budget_repo.find_by_user(user_id)
+            for budget in budgets:
+                temp_expires = budget.get("temp_limit_expires_at")
+                if budget.get("temp_limit") is None or not temp_expires:
+                    continue
+                exp = temp_expires.replace(tzinfo=None) if temp_expires.tzinfo else temp_expires
+                if now_utc > exp:
+                    await budget_repo.clear_temp_override(str(budget["_id"]), user_id)
+                    cleared += 1
+                    logger.info(
+                        "Cleared expired temp override: budget=%s user=%s category=%s",
+                        budget["_id"],
+                        user_id,
+                        budget.get("category_id"),
+                    )
+        except Exception:
+            logger.exception("Budget check failed for user_id=%s", user_id)
+
+    logger.info("Budget checks done — %d expired temp overrides cleared", cleared)
 
 
-async def main() -> None:
+_JOBS = {
+    "behavioral": run_behavioral_analysis,
+    "reports": run_weekly_reports,
+    "budget": run_budget_checks,
+}
+
+
+async def main(job: str = "all") -> None:
     """One-shot entry point for Cloud Run Jobs (triggered by Cloud Scheduler).
 
-    For local/docker-compose use, run this via a cron container or a simple
-    scheduler wrapper. The while-True polling pattern is gone — the trigger
-    interval is controlled by the Cloud Scheduler job, not this process.
+    Pass --job <name> to run a single job:
+        behavioral  — daily nudge fan-out (08:00 ICT)
+        reports     — weekly summary per user (Mon 09:00 ICT)
+        budget      — hourly temp-override cleanup
+
+    Omit --job (or pass 'all') to run every job sequentially — useful for
+    local / docker-compose development where a single container handles all work.
     """
-    logger.info("ChiWi worker started")
+    logger.info("ChiWi worker started (job=%s)", job)
     await container.startup()
-    try:
-        await run_behavioral_analysis()
-    except Exception:
-        logger.exception("Behavioral run failed")
-        raise  # Let Cloud Run Jobs mark the execution as failed
-    finally:
-        await container.shutdown()
-    logger.info("ChiWi worker finished")
+
+    targets = list(_JOBS.items()) if job == "all" else [(job, _JOBS[job])]
+    failed = False
+    for name, fn in targets:
+        try:
+            await fn()
+        except Exception:
+            logger.exception("Job '%s' failed", name)
+            failed = True
+
+    await container.shutdown()
+    if failed:
+        raise RuntimeError("One or more worker jobs failed — see logs above")
+    logger.info("ChiWi worker finished (job=%s)", job)
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import argparse
+
+    parser = argparse.ArgumentParser(description="ChiWi scheduled worker")
+    parser.add_argument(
+        "--job",
+        choices=[*_JOBS.keys(), "all"],
+        default="all",
+        help="Which job to run (default: all)",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(job=args.job))

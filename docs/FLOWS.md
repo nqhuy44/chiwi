@@ -326,7 +326,7 @@ flowchart TD
     L --> O["Hourly: Budget check"]
 ```
 
-## 8. Analytics Flow (Comparison / Trend)
+## 9. Analytics Flow (Comparison / Trend)
 
 ```mermaid
 sequenceDiagram
@@ -356,3 +356,96 @@ sequenceDiagram
     TG->>User: Comparative analysis with trends
 ```
 
+## 10. Budget Management Flows
+
+### 10a. Set a budget (chat)
+
+```mermaid
+sequenceDiagram
+    participant User as 💬 User
+    participant TG as Telegram
+    participant Orch as Orchestrator
+    participant CA as Conversational Agent
+    participant BudgetRepo as BudgetRepository
+
+    User->>TG: "Đặt ngân sách ăn uống 3 triệu mỗi tháng"
+    TG->>Orch: route("chat", ...)
+    Orch->>CA: process_message()
+    CA->>CA: Gemini Pro → intent: set_budget
+    Note over CA: category=food, limit=3000000, period=monthly
+    CA-->>Orch: IntentResult
+    Orch->>BudgetRepo: insert(BudgetDocument) + BudgetEvent(created)
+    Orch->>TG: "✅ Ngân sách Ăn uống: 3,000,000đ/tháng"
+    TG->>User: Confirmation
+```
+
+### 10b. View budgets (chat)
+
+```mermaid
+sequenceDiagram
+    participant User as 💬 User
+    participant TG as Telegram
+    participant Orch as Orchestrator
+    participant CA as Conversational Agent
+    participant BudgetRepo as BudgetRepository
+
+    User->>TG: "Ngân sách của tôi thế nào?"
+    TG->>Orch: route("chat", ...)
+    Orch->>CA: process_message()
+    CA->>CA: Gemini Pro → intent: ask_budget
+    Orch->>BudgetRepo: find_active(user_id)
+    Orch->>Orch: Compute spend-to-limit ratio for each budget
+    Orch->>TG: Usage bars per category
+    TG->>User: "🍔 Ăn uống: 2.1M / 3M [████░] 70%"
+```
+
+### 10c. Modify a budget (update / temp override / silence / disable)
+
+```mermaid
+sequenceDiagram
+    participant User as 💬 User
+    participant TG as Telegram
+    participant Orch as Orchestrator
+    participant CA as Conversational Agent
+    participant BudgetRepo as BudgetRepository
+
+    User->>TG: "Tăng tạm ngân sách mua sắm 500k tháng này"
+    TG->>Orch: route("chat", ...)
+    Orch->>CA: process_message()
+    CA->>CA: Gemini Pro → intent: temp_increase_budget
+    Note over CA: category=shopping, amount=500000
+    CA-->>Orch: IntentResult
+    Orch->>BudgetRepo: set_temp_limit(budget_id, temp_limit, expires_at)
+    Orch->>BudgetRepo: insert BudgetEvent(temp_override_set)
+    Orch->>TG: "✅ Ngân sách Mua sắm tạm tăng +500k tháng này"
+    TG->>User: Confirmation
+```
+
+Other intents follow the same pattern:
+- `update_budget` → updates `limit_amount` permanently + BudgetEvent(`limit_updated`)
+- `silence_budget` → sets `is_silenced=True` + BudgetEvent(`silenced`); budget is still tracked but no alert nudges
+- `disable_budget` → sets `is_active=False` + BudgetEvent(`disabled`)
+
+## 11. Spending vs Average Flow
+
+```mermaid
+sequenceDiagram
+    participant User as 💬 User
+    participant TG as Telegram
+    participant Orch as Orchestrator
+    participant CA as Conversational Agent
+    participant SpendingAvg as spending_avg.py
+    participant Mongo as MongoDB
+
+    User->>TG: "Cafe tháng này so với trung bình không?"
+    TG->>Orch: route("chat", ...)
+    Orch->>CA: process_message()
+    CA->>CA: Gemini Pro → intent: ask_spending_vs_avg
+    Note over CA: period=this_month
+    CA-->>Orch: IntentResult
+    Orch->>SpendingAvg: compute_avg_all_categories(user_id, period)
+    SpendingAvg->>Mongo: Aggregate past 2+ complete periods per category
+    SpendingAvg-->>Orch: {category: {avg, current, delta_pct}}
+    Orch->>TG: Comparison table with deltas
+    TG->>User: "☕ Cafe: 850k (TB: 600k) ▲42%\n🍔 Ăn uống: 1.2M (TB: 1.5M) ▼20%"
+```

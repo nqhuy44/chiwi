@@ -98,13 +98,21 @@ If the user is asking a question (not logging a transaction), respond conversati
 |---|---|---|
 | `log_transaction` | "Ăn phở 60k hôm qua" | Parse → Tagging → Store |
 | `ask_balance` | "Tháng này chi bao nhiêu rồi?" | Query Mongo → Respond |
+| `ask_spending_vs_avg` | "Cafe tháng này so với trung bình?" | `compute_avg_all_categories()` → comparison table |
 | `request_report` | "Báo cáo tuần này" | Route to Reporting Agent |
 | `request_analysis` | "So sánh tuần này với tuần trước" | Route to Analytics Agent |
 | `set_budget` | "Đặt ngân sách ăn uống 3 triệu" | Insert BudgetDocument → Confirm |
+| `ask_budget` | "Ngân sách của tôi thế nào?" | Query active budgets → usage bars |
+| `update_budget` | "Tăng ngân sách ăn uống lên 4 triệu" | Update `limit_amount` + BudgetEvent |
+| `temp_increase_budget` | "Tăng tạm ngân sách mua sắm 500k tháng này" | Set `temp_limit` / `temp_limit_expires_at` + BudgetEvent |
+| `silence_budget` | "Tắt cảnh báo ngân sách cafe" | Set `is_silenced=True` + BudgetEvent |
+| `disable_budget` | "Xoá ngân sách ăn uống" | Set `is_active=False` + BudgetEvent |
 | `set_goal` | "Mục tiêu tiết kiệm 20 triệu mua laptop" | Insert GoalDocument → Confirm |
 | `set_subscription` | "Đăng ký Netflix 260k mỗi tháng" | Insert SubscriptionDocument → Confirm |
 | `list_subscriptions` | "Danh sách đăng ký của tôi" | Query subscriptions → List |
 | `mark_subscription_paid` | "Netflix đã trả rồi" | `mark_charged()` → advance next date |
+| `cancel_subscription` | "Huỷ Netflix" | Set `is_active=False`, `cancellation_reason="manual"` |
+| `update_subscription` | "Netflix tăng giá lên 299k" | Deactivate old (`cancellation_reason="replaced"`), insert new with `replaces_id` |
 | `ask_category` | "Có những danh mục nào?" | List categories → Respond |
 | `general_chat` | "Chào ChiWi" | Conversational response |
 
