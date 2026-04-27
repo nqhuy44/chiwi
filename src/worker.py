@@ -362,10 +362,11 @@ async def run_behavioral_analysis() -> None:
             }
             result = await orchestrator.route("scheduled", payload)
             logger.info(
-                "Nudge dispatched user_id=%s type=%s status=%s",
+                "Nudge dispatched user_id=%s type=%s status=%s reason=%s",
                 user_id,
                 trigger["nudge_type"],
                 result.get("status"),
+                result.get("blocked_reason") or "-",
             )
 
 
