@@ -25,10 +25,11 @@ class RedisClient:
         try:
             import redis.asyncio as redis
 
-            self._redis = redis.from_url(
-                settings.redis_url, decode_responses=True
-            )
-            # Verify connectivity
+            kwargs: dict = {"decode_responses": True}
+            if settings.redis_url.startswith("rediss://"):
+                kwargs["ssl_cert_reqs"] = None
+
+            self._redis = redis.from_url(settings.redis_url, **kwargs)
             await self._redis.ping()
             logger.info("Redis connected: %s", settings.redis_url)
         except Exception:
