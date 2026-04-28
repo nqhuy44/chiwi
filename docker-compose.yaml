@@ -10,7 +10,6 @@ x-logging: &default-logging
 
 x-app: &app-config
   image: docker.io/nqh44/chiwi:latest
-  restart: unless-stopped
   logging: *default-logging
   env_file:
     - .env
@@ -29,16 +28,16 @@ services:
   worker-behavioral:
     <<: *app-config
     container_name: chiwi-worker-behavioral
-    command: supercronic /app/cron/worker-behavioral.cron
+    command: /usr/local/bin/supercronic /app/cron/worker-behavioral.cron
 
   # Clears expired budget temp-overrides every hour (cron: 0 * * * *).
   worker-budget:
     <<: *app-config
     container_name: chiwi-worker-budget
-    command: supercronic /app/cron/worker-budget.cron
+    command: /usr/local/bin/supercronic /app/cron/worker-budget.cron
 
   # Sends the weekly summary report every Monday at 09:00 ICT (cron: 0 9 * * 1).
   worker-reports:
     <<: *app-config
     container_name: chiwi-worker-reports
-    command: supercronic /app/cron/worker-reports.cron
+    command: /usr/local/bin/supercronic /app/cron/worker-reports.cron

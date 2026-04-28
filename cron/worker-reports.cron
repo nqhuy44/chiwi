@@ -1,2 +1,2 @@
 CRON_TZ=Asia/Ho_Chi_Minh
-0 9 * * 1 /usr/local/bin/python -m src.worker --job reports
+0 9 * * 1 python -m src.worker --job reports
