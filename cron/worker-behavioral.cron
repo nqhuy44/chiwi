@@ -1,2 +1,2 @@
 CRON_TZ=Asia/Ho_Chi_Minh
-0 * * * * python -m src.worker --job behavioral
+0 * * * * /usr/local/bin/python -m src.worker --job behavioral
