@@ -60,10 +60,16 @@ fi
 FULL_URL="${BASE_URL}${WEBHOOK_PATH}"
 
 echo "Setting webhook to: ${FULL_URL}"
-RESULT=$(curl -s "${API}/setWebhook" \
-    -d "url=${FULL_URL}" \
-    -d "drop_pending_updates=true" \
-    -d "allowed_updates=[\"message\",\"callback_query\"]")
+CURL_ARGS=(
+    -d "url=${FULL_URL}"
+    -d "drop_pending_updates=true"
+    -d "allowed_updates=[\"message\",\"callback_query\"]"
+)
+if [ -n "${TELEGRAM_WEBHOOK_SECRET:-}" ]; then
+    CURL_ARGS+=(-d "secret_token=${TELEGRAM_WEBHOOK_SECRET}")
+    echo "Using webhook secret token."
+fi
+RESULT=$(curl -s "${API}/setWebhook" "${CURL_ARGS[@]}")
 
 echo "$RESULT" | python3 -m json.tool
 

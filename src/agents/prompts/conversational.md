@@ -6,6 +6,7 @@ Properly handle Vietnamese slang for money (e.g., "k" = 1,000, "củ" / "triệu
 Determine the user's intent:
 
 - "log_transaction": The user is reporting a spending or income event (e.g., "hôm qua mua cà phê 50k", "nhận lương 15 củ").
+- "delete_transaction": The user wants to delete the most recent transaction (e.g., "Xoá giao dịch vừa rồi", "Nhầm rồi xoá đi giúp mình", "Bỏ cái giao dịch vừa ghi đi").
 - "ask_balance": The user wants the net balance or total spending for a period (e.g., "còn bao nhiêu tiền", "tháng này tiêu hết bao nhiêu rồi").
 - "ask_spending_vs_avg": The user wants to compare their spending to their own historical average (e.g., "tuần này tôi chi so với trung bình thế nào", "tôi đang chi nhiều hơn hay ít hơn bình thường", "so sánh chi tiêu hôm nay với ngày thường"). (e.g., "còn bao nhiêu tiền", "tháng này tiêu hết bao nhiêu rồi").
 - "ask_category": The user asks which spending categories exist (e.g., "có những danh mục nào", "Mai phân loại ra sao").
@@ -27,7 +28,7 @@ Determine the user's intent:
 
 Return ONLY a valid JSON object matching this schema:
 {
-"intent": "log_transaction" | "ask_balance" | "ask_spending_vs_avg" | "ask_category" | "request_report" | "request_analysis" | "set_budget" | "ask_budget" | "update_budget" | "temp_increase_budget" | "silence_budget" | "disable_budget" | "set_goal" | "set_subscription" | "list_subscriptions" | "mark_subscription_paid" | "cancel_subscription" | "update_subscription" | "general_chat",
+"intent": "log_transaction" | "delete_transaction" | "ask_balance" | "ask_spending_vs_avg" | "ask_category" | "request_report" | "request_analysis" | "set_budget" | "ask_budget" | "update_budget" | "temp_increase_budget" | "silence_budget" | "disable_budget" | "set_goal" | "set_subscription" | "list_subscriptions" | "mark_subscription_paid" | "cancel_subscription" | "update_subscription" | "general_chat",
 "payload": {
 "amount": <number>,
 "currency": "VND",
@@ -56,7 +57,8 @@ Return ONLY a valid JSON object matching this schema:
 "subscription_next_date": "<ISO8601 string or null, first/next charge date if mentioned>",
 "subscription_new_amount": <number, updated price for update_subscription>,
 "subscription_new_period": "weekly" | "monthly" | "yearly" | null,
-"subscription_new_date": "<ISO8601 string or null, when the new price takes effect>"
+"subscription_new_date": "<ISO8601 string or null, when the new price takes effect>",
+"reference": "last"
 },
 "response_text": "<string, short friendly Vietnamese reply. Use ONLY <b>, <i>, <code> tags. Use plain newlines for line breaks.>"
 }
@@ -81,6 +83,7 @@ Rules per intent:
 - "mark_subscription_paid": `subscription_merchant` is required. Leave `response_text` empty — the server confirms.
 - "cancel_subscription": `subscription_merchant` is required (the service the user wants to cancel). Leave `response_text` empty — the server confirms.
 - "update_subscription": `subscription_merchant` and `subscription_new_amount` are required; `subscription_new_period` and `subscription_new_date` are optional. Leave `response_text` empty — the server confirms.
+- "delete_transaction": Always set `reference: "last"`. Leave `payload` otherwise empty. Leave `response_text` empty — the server confirms.
 - "general_chat": leave `payload` empty ({}) and provide a friendly `response_text`.
 
 Do not wrap the JSON in markdown blocks. Do NOT emit ```json fences.
@@ -120,3 +123,5 @@ Examples:
 - "bỏ theo dõi Notion" → {"intent": "cancel_subscription", "payload": {"subscription_merchant": "Notion"}, "response_text": ""}
 - "Netflix tăng giá lên 300k từ tháng sau" → {"intent": "update_subscription", "payload": {"subscription_merchant": "Netflix", "subscription_new_amount": 300000, "subscription_new_period": "monthly"}, "response_text": ""}
 - "Spotify đổi gói 99k/tháng" → {"intent": "update_subscription", "payload": {"subscription_merchant": "Spotify", "subscription_new_amount": 99000, "subscription_new_period": "monthly"}, "response_text": ""}
+- "Xoá giao dịch vừa rồi" → {"intent": "delete_transaction", "payload": {"reference": "last"}, "response_text": ""}
+- "Nhầm rồi xoá đi giúp mình" → {"intent": "delete_transaction", "payload": {"reference": "last"}, "response_text": ""}

@@ -49,7 +49,7 @@ async def test_tagging_uses_historical_majority(mock_gemini, mock_redis, mock_tr
     assert "morning" in result["tags"]
     mock_gemini.call_flash.assert_not_called()
     mock_redis.set_merchant_cache.assert_called_once_with(
-        "Highlands Coffee", "Cà phê / Trà sữa"
+        "Highlands Coffee", "Cà phê / Trà sữa", "u1"
     )
 
 
@@ -74,7 +74,7 @@ async def test_tagging_calls_gemini_on_no_majority(mock_gemini, mock_redis, mock
     assert "afternoon" in result["tags"]
     mock_gemini.call_flash.assert_called_once()
     mock_redis.set_merchant_cache.assert_called_once_with(
-        "Highlands Coffee", "Cà phê / Trà sữa"
+        "Highlands Coffee", "Cà phê / Trà sữa", "u1"
     )
 
 
@@ -111,26 +111,30 @@ async def test_tagging_with_no_merchant(mock_gemini, mock_redis, mock_transactio
 
 def test_majority_category():
     """Unit test for majority calculation logic."""
+    # Use a transaction with no direction/amount to skip outlier checks.
+    txn = _make_parsed()
+    txn = txn.model_copy(update={"direction": None, "amount": None})
+
     assert TaggingAgent._majority_category([
         {"category_id": "A"}, {"category_id": "A"}, {"category_id": "B"}
-    ]) == "A"
-    
+    ], txn) == "A"
+
     # Needs strict majority (n > total/2)
     assert TaggingAgent._majority_category([
         {"category_id": "A"}, {"category_id": "A"},
         {"category_id": "B"}, {"category_id": "B"}
-    ]) is None
+    ], txn) is None
 
     # Needs min count of 2
     assert TaggingAgent._majority_category([
         {"category_id": "A"}
-    ]) is None
-    
+    ], txn) is None
+
     # Ignores fallback category when finding top candidate, but still needs strict majority of total history
     assert TaggingAgent._majority_category([
-        {"category_id": "A"}, {"category_id": "A"}, {"category_id": "A"}, 
+        {"category_id": "A"}, {"category_id": "A"}, {"category_id": "A"},
         {"category_id": "Khác"}, {"category_id": "Khác"}
-    ]) == "A"
+    ], txn) == "A"
 
 
 def test_merge_tags():

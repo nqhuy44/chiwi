@@ -70,9 +70,9 @@ class TaggingAgent:
         """Return {category_name, tags} for a parsed transaction."""
         merchant = transaction.merchant_name
 
-        # Layer 1 — Redis merchant cache
+        # Layer 1 — Redis merchant cache (keyed by user_id to prevent cross-user poisoning)
         if merchant:
-            cached = await self._redis.get_merchant_cache(merchant)
+            cached = await self._redis.get_merchant_cache(merchant, user_id)
             if cached:
                 logger.info("Merchant cache hit: %s -> %s", merchant, cached)
                 return {"category_name": cached, "tags": []}
@@ -88,7 +88,7 @@ class TaggingAgent:
                 len(history),
             )
             if merchant:
-                await self._redis.set_merchant_cache(merchant, majority)
+                await self._redis.set_merchant_cache(merchant, majority, user_id)
             return {
                 "category_name": majority,
                 "tags": self._merge_tags(history),
@@ -102,7 +102,7 @@ class TaggingAgent:
         tags = result.get("tags", [])
 
         if merchant and category != FALLBACK_CATEGORY:
-            await self._redis.set_merchant_cache(merchant, category)
+            await self._redis.set_merchant_cache(merchant, category, user_id)
             logger.info("Merchant cached: %s -> %s", merchant, category)
 
         return {"category_name": category, "tags": tags}
@@ -192,8 +192,9 @@ class TaggingAgent:
     def _build_user_msg(
         transaction: ParsedTransaction, history: list[dict]
     ) -> str:
+        merchant_name = transaction.merchant_name or "Unknown"
         payload: dict = {
-            "merchant": transaction.merchant_name or "Unknown",
+            "merchant": f"<merchant>{merchant_name}</merchant>",
             "amount": transaction.amount,
             "currency": transaction.currency,
             "direction": transaction.direction,

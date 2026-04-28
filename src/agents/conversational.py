@@ -26,6 +26,7 @@ SYSTEM_PROMPT_TEMPLATE = load_prompt("conversational")
 class IntentResult(BaseModel):
     intent: Literal[
         "log_transaction",
+        "delete_transaction",
         "ask_balance",
         "ask_spending_vs_avg",
         "ask_category",
@@ -70,9 +71,9 @@ class ConversationalAgent:
         prompt = SYSTEM_PROMPT_TEMPLATE.replace("{{CURRENT_TIMESTAMP}}", now_iso)
 
         masked = mask_pii(message) if settings.pii_mask_enabled else message
-        user_msg = f"User message: {masked}"
+        user_msg = f"<user_message>\n{masked}\n</user_message>"
         if session_context:
-            user_msg += f"\nSession Context: {session_context}"
+            user_msg += f"\n<session_context>\n{session_context}\n</session_context>"
 
         result = await self._gemini.call_pro(prompt, user_msg)
 

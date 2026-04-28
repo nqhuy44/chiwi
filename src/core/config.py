@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str = ""
     telegram_allowed_user_ids: str = ""
     telegram_webhook_url: str = ""
+    telegram_webhook_secret: str = ""
     telegram_message_max_age_seconds: int = 120  # Drop messages older than this
     telegram_rate_limit_per_minute: int = 20  # Max messages per user per minute
 

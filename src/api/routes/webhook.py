@@ -8,6 +8,7 @@ from src.core.config import settings
 from src.core.dependencies import container
 from src.core.schemas import NotificationPayload, NotificationResponse
 
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/webhook")
@@ -148,6 +149,17 @@ async def _handle_callback_query(callback_query: dict) -> None:
             await telegram.answer_callback_query(cq_id, text="Dữ liệu không hợp lệ.")
             return
         _, txn_id, new_category = parts
+        from bson import ObjectId
+        from bson.errors import InvalidId
+        try:
+            ObjectId(txn_id)
+        except (InvalidId, TypeError):
+            await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
+            return
+        from src.core.categories import category_names
+        if new_category not in set(category_names()):
+            await telegram.answer_callback_query(cq_id, text="Danh mục không hợp lệ.")
+            return
         payload = {
             "user_id": from_id,
             "transaction_id": txn_id,
@@ -160,6 +172,70 @@ async def _handle_callback_query(callback_query: dict) -> None:
         # Collapse the keyboard after correction
         await telegram.edit_message_reply_markup(chat_id, message_id, keyboard=None)
 
+    elif cq_data.startswith("confirm_txn:"):
+        txn_id = cq_data.split(":", 1)[1]
+        from bson import ObjectId
+        from bson.errors import InvalidId
+        try:
+            ObjectId(txn_id)
+        except (InvalidId, TypeError):
+            await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
+            return
+        txn = await container.transaction_repo.find_by_id(txn_id)
+        if not txn or txn.get("user_id") != from_id:
+            await telegram.answer_callback_query(cq_id, text="Không tìm thấy giao dịch.")
+            return
+        if txn.get("locked"):
+            await telegram.answer_callback_query(cq_id, text="🔒 Đã xác nhận rồi.")
+            return
+        await container.transaction_repo.lock(txn_id, from_id)
+        await telegram.answer_callback_query(cq_id, text="✅ Đã xác nhận và khoá giao dịch.")
+        await telegram.edit_message_reply_markup(chat_id, message_id, keyboard=None)
+
+    elif cq_data.startswith("delete_confirm:"):
+        txn_id = cq_data.split(":", 1)[1]
+        from bson import ObjectId
+        from bson.errors import InvalidId
+        try:
+            ObjectId(txn_id)
+        except (InvalidId, TypeError):
+            await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
+            return
+        txn = await container.transaction_repo.find_by_id(txn_id)
+        if not txn or txn.get("user_id") != from_id:
+            await telegram.answer_callback_query(cq_id, text="Không tìm thấy giao dịch.")
+            return
+        if txn.get("locked"):
+            await telegram.answer_callback_query(cq_id, text="🔒 Giao dịch đã xác nhận, không thể xoá.")
+            return
+        await telegram.answer_callback_query(cq_id)
+        confirm_keyboard = [[
+            {"text": "✅ Xác nhận xoá", "callback_data": f"delete_ok:{txn_id}"},
+            {"text": "❌ Giữ lại", "callback_data": f"delete_cancel:{txn_id}"},
+        ]]
+        await telegram.edit_message_reply_markup(chat_id, message_id, confirm_keyboard)
+
+    elif cq_data.startswith("delete_ok:"):
+        txn_id = cq_data.split(":", 1)[1]
+        from bson import ObjectId
+        from bson.errors import InvalidId
+        try:
+            ObjectId(txn_id)
+        except (InvalidId, TypeError):
+            await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
+            return
+        result = await orchestrator.route("delete_transaction", {
+            "user_id": from_id,
+            "transaction_id": txn_id,
+        })
+        response_text = result.get("response_text", "✅ Đã xoá.")
+        await telegram.answer_callback_query(cq_id, text=response_text[:200])
+        await telegram.edit_message_reply_markup(chat_id, message_id, keyboard=None)
+
+    elif cq_data.startswith("delete_cancel:"):
+        await telegram.answer_callback_query(cq_id, text="Đã giữ lại giao dịch.")
+        await telegram.edit_message_reply_markup(chat_id, message_id, keyboard=None)
+
     elif cq_data.startswith("sub_reg|"):
         parts = cq_data.split("|", 3)
         if len(parts) != 4:
@@ -170,6 +246,9 @@ async def _handle_callback_query(callback_query: dict) -> None:
             amount = float(amount_str)
         except ValueError:
             await telegram.answer_callback_query(cq_id, text="Dữ liệu không hợp lệ.")
+            return
+        if period not in {"weekly", "monthly", "yearly"}:
+            await telegram.answer_callback_query(cq_id, text="Chu kỳ không hợp lệ.")
             return
         result = await orchestrator.handle_subscription_register({
             "user_id": from_id,
@@ -270,15 +349,24 @@ async def receive_notification(
 
 
 @router.post("/telegram")
-async def telegram_webhook(update: dict) -> dict:
+async def telegram_webhook(
+    update: dict,
+    x_telegram_bot_api_secret_token: str | None = Header(default=None),
+) -> dict:
     """Receive Telegram Bot API webhook updates.
 
     Guards:
+    0. Secret token validation — rejects requests without the registered secret.
     1. Stale message filter — drops messages older than configured max age.
     2. Deduplication — skips already-processed update_ids (Redis SET with TTL).
     3. Rate limiting — caps messages per user per minute.
     """
     import time as _time
+
+    if settings.telegram_webhook_secret:
+        if x_telegram_bot_api_secret_token != settings.telegram_webhook_secret:
+            logger.warning("Telegram webhook rejected: invalid or missing secret token")
+            raise HTTPException(status_code=403, detail="Forbidden")
 
     update_id = update.get("update_id")
     logger.info("Telegram update received: %s", update_id)

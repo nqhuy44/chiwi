@@ -133,6 +133,7 @@ class TelegramService:
             message = await self.bot.send_message(
                 chat_id=chat_id,
                 text=text,
+                parse_mode=ParseMode.HTML,
                 disable_notification=True,
             )
             return {"message_id": message.message_id}

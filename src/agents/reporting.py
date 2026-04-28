@@ -9,6 +9,8 @@ Uses Gemini 2.5 Flash.
 import logging
 
 from src.agents.prompts import load_prompt
+from src.api.middleware.pii_mask import mask_pii
+from src.core.config import settings
 from src.core.schemas import ReportRequest
 from src.core.toon import to_toon
 from src.services.gemini import GeminiService
@@ -64,11 +66,12 @@ class ReportingAgent:
                 for t in transactions
             ]
 
-        user_msg = (
+        raw_msg = (
             to_toon(payload)
             + "\n\nHãy viết một báo cáo ngắn gọn, thân thiện bằng tiếng Việt."
             " Nếu không có giao dịch, hãy động viên nhẹ nhàng."
         )
+        user_msg = mask_pii(raw_msg) if settings.pii_mask_enabled else raw_msg
 
         result = await self._gemini.call_flash(SYSTEM_PROMPT, user_msg)
         report_text = result.get("report_text", "Không thể tạo báo cáo lúc này.")

@@ -65,6 +65,23 @@ class TransactionRepository:
         )
         return await cursor.to_list(length=limit)
 
+    async def lock(self, transaction_id: str, user_id: str) -> bool:
+        from bson import ObjectId
+
+        result = await self.collection.update_one(
+            {"_id": ObjectId(transaction_id), "user_id": user_id},
+            {"$set": {"locked": True}},
+        )
+        return result.modified_count > 0
+
+    async def delete(self, transaction_id: str, user_id: str) -> bool:
+        from bson import ObjectId
+
+        result = await self.collection.delete_one(
+            {"_id": ObjectId(transaction_id), "user_id": user_id}
+        )
+        return result.deleted_count > 0
+
     async def update_category(
         self, transaction_id: str, category_id: str, user_id: str
     ) -> bool:

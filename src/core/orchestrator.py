@@ -34,8 +34,18 @@ from src.services.telegram import TelegramService
 
 logger = logging.getLogger(__name__)
 
+
+def _txn_keyboard(txn_id: str) -> list[list[dict]]:
+    """Standard inline keyboard attached to every stored transaction message."""
+    return [[
+        {"text": "🗑️ Xoá", "callback_data": f"delete_confirm:{txn_id}"},
+        {"text": "✅ Xác nhận", "callback_data": f"confirm_txn:{txn_id}"},
+    ]]
+
+
 EventType = Literal[
-    "notification", "chat", "voice", "scheduled", "report", "analysis", "correction"
+    "notification", "chat", "voice", "scheduled", "report", "analysis",
+    "correction", "delete_transaction",
 ]
 
 
@@ -114,6 +124,8 @@ class Orchestrator:
                 return await self._handle_analysis(payload)
             case "correction":
                 return await self._handle_correction(payload)
+            case "delete_transaction":
+                return await self._handle_delete_transaction(payload)
             case _:
                 logger.warning("Unknown event type: %s", event_type)
                 return {"status": "unknown_event"}
@@ -168,6 +180,8 @@ class Orchestrator:
                 parsed.transaction_time or datetime.now(UTC), chat_id, txn_id,
             )
 
+        await self._redis.set_last_transaction(user_id, txn_id)
+
         if chat_id:
             direction_icon = "➕" if txn_doc.direction == "inflow" else "➖"
             amount_str = f"{txn_doc.amount:,.0f}"
@@ -175,8 +189,9 @@ class Orchestrator:
             parts = [f"✅ {direction_icon} {amount_str}đ", category]
             if parsed.merchant_name:
                 parts.append(parsed.merchant_name)
-            keyboard = [[{"text": "✏️ Sửa danh mục", "callback_data": f"cats:{txn_id}"}]]
-            await self._telegram.send_message_with_keyboard(chat_id, " | ".join(parts), keyboard)
+            await self._telegram.send_message_with_keyboard(
+                chat_id, " | ".join(parts), _txn_keyboard(txn_id)
+            )
 
         return {
             "status": "stored",
@@ -353,6 +368,13 @@ class Orchestrator:
                 }
             )
 
+        if intent_result.intent == "delete_transaction":
+            return await self._handle_delete_transaction({
+                "user_id": user_id,
+                "transaction_id": intent_result.payload.get("transaction_id"),
+                "reference": intent_result.payload.get("reference", "last"),
+            })
+
         if intent_result.intent != "log_transaction":
             return {
                 "status": "chat_processed",
@@ -410,6 +432,8 @@ class Orchestrator:
         txn_id = await self._transaction_repo.insert(txn_doc)
         logger.info("Transaction stored via chat: %s", txn_id)
 
+        await self._redis.set_last_transaction(user_id, txn_id)
+
         if txn_doc.direction == "inflow":
             await self._update_goal_progress(user_id, txn_doc.amount)
 
@@ -424,7 +448,7 @@ class Orchestrator:
             "transaction_id": txn_id,
             "parsed": parsed.model_dump(),
             "response_text": intent_result.response_text or "Đã ghi nhận giao dịch của bạn!",
-            "inline_keyboard": [[{"text": "✏️ Sửa danh mục", "callback_data": f"cats:{txn_id}"}]],
+            "inline_keyboard": _txn_keyboard(txn_id),
         }
 
     async def _handle_scheduled(self, payload: dict) -> dict:
@@ -1422,6 +1446,61 @@ class Orchestrator:
 
         return True
 
+    async def _handle_delete_transaction(self, payload: dict) -> dict:
+        """Delete a transaction by id. Resolves 'last' reference from Redis session."""
+        user_id = payload.get("user_id", "")
+        transaction_id = payload.get("transaction_id")
+        reference = payload.get("reference", "last")
+
+        if not user_id:
+            return {"status": "error", "response_text": "Không tìm thấy user_id."}
+
+        if not transaction_id and reference == "last":
+            transaction_id = await self._redis.get_last_transaction(user_id)
+
+        if not transaction_id:
+            return {
+                "status": "error",
+                "response_text": (
+                    "Không tìm thấy giao dịch để xoá. "
+                    "Bạn thử bấm nút <b>🗑️ Xoá</b> trên tin nhắn giao dịch nhé!"
+                ),
+            }
+
+        from bson import ObjectId
+        from bson.errors import InvalidId
+        try:
+            ObjectId(transaction_id)
+        except (InvalidId, TypeError):
+            return {"status": "error", "response_text": "ID giao dịch không hợp lệ."}
+
+        original = await self._transaction_repo.find_by_id(transaction_id)
+        if not original or original.get("user_id") != user_id:
+            logger.warning("Delete ownership violation: user=%s txn=%s", user_id, transaction_id)
+            return {"status": "error", "response_text": "Không tìm thấy giao dịch."}
+
+        if original.get("locked"):
+            return {
+                "status": "locked",
+                "response_text": "🔒 Giao dịch này đã được xác nhận, không thể xoá.",
+            }
+
+        deleted = await self._transaction_repo.delete(transaction_id, user_id)
+        if not deleted:
+            return {"status": "error", "response_text": "Không xoá được giao dịch."}
+
+        amount = original.get("amount", 0)
+        icon = "➕" if original.get("direction") == "inflow" else "➖"
+        merchant = original.get("merchant_name", "")
+        summary = f"{icon} {amount:,.0f}đ"
+        if merchant:
+            summary += f" | {merchant}"
+        logger.info("Transaction deleted: txn=%s user=%s", transaction_id, user_id)
+        return {
+            "status": "deleted",
+            "response_text": f"🗑️ Đã xoá giao dịch <b>{summary}</b>.",
+        }
+
     async def _handle_correction(self, payload: dict) -> dict:
         """Apply a user correction: update the transaction, invalidate
         the merchant cache, and record the override so tagging learns.
@@ -1470,7 +1549,7 @@ class Orchestrator:
         # Invalidate Redis so the next enrich re-evaluates with the correction
         # sitting in Mongo history (user_corrected=True).
         if merchant_name:
-            await self._redis.delete_merchant_cache(merchant_name)
+            await self._redis.delete_merchant_cache(merchant_name, user_id)
 
         # Record the correction for audit + future high-weight overrides.
         await self._correction_repo.insert(

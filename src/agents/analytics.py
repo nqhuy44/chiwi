@@ -10,6 +10,8 @@ import logging
 from collections import defaultdict
 
 from src.agents.prompts import load_prompt
+from src.api.middleware.pii_mask import mask_pii
+from src.core.config import settings
 from src.core.schemas import AnalysisRequest
 from src.core.toon import to_toon
 from src.services.gemini import GeminiService
@@ -47,9 +49,10 @@ class AnalyticsAgent:
             else None
         )
 
-        user_msg = self._build_user_message(
+        raw_msg = self._build_user_message(
             request, current_summary, comparison_summary, user_timezone
         )
+        user_msg = mask_pii(raw_msg) if settings.pii_mask_enabled else raw_msg
 
         result = await self._gemini.call_pro(SYSTEM_PROMPT, user_msg)
         report_text = result.get("report_text", "Không thể phân tích dữ liệu lúc này.")
