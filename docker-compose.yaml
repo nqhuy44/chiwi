@@ -23,7 +23,7 @@ services:
     ports:
       - "${API_PORT:-8000}:8000"
 
-  # Runs behavioral nudges every hour (cron: 0 * * * *).
+  # Runs behavioral nudges every day at 8 AM (cron: 0 8 * * *).
   # Anti-spam in BehavioralAgent prevents duplicate nudges within 24 h.
   worker-behavioral:
     <<: *app-config
@@ -36,7 +36,7 @@ services:
     container_name: chiwi-worker-budget
     command: /usr/local/bin/supercronic /app/cron/worker-budget.cron
 
-  # Sends the weekly summary report every Monday at 09:00 ICT (cron: 0 9 * * 1).
+  # Sends the weekly summary report every Monday at 9 AM (cron: 0 9 * * 1).
   worker-reports:
     <<: *app-config
     container_name: chiwi-worker-reports
