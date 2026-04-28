@@ -18,6 +18,7 @@ from src.db.repositories.nudge_repo import NudgeRepository
 from src.db.repositories.subscription_repo import SubscriptionRepository
 from src.db.repositories.transaction_repo import TransactionRepository
 from src.db.repositories.user_repo import UserRepository
+from src.services.dashboard import DashboardService
 from src.services.gemini import GeminiService
 from src.services.redis_client import RedisClient
 from src.services.telegram import TelegramService
@@ -48,6 +49,9 @@ class AppContainer:
     nudge_repo: NudgeRepository | None = None
     subscription_repo: SubscriptionRepository | None = None
 
+    # Dashboard service (initialized after repos + redis are ready)
+    dashboard_service: DashboardService | None = None
+
     # Orchestrator (initialized after all services are ready)
     _orchestrator: object | None = None
 
@@ -77,6 +81,16 @@ class AppContainer:
 
         # Gemini
         self.gemini.initialize()
+
+        # Dashboard service
+        self.dashboard_service = DashboardService(
+            transaction_repo=self.transaction_repo,
+            budget_repo=self.budget_repo,
+            goal_repo=self.goal_repo,
+            subscription_repo=self.subscription_repo,
+            nudge_repo=self.nudge_repo,
+            redis=self.redis,
+        )
 
         # Orchestrator
         from src.core.orchestrator import Orchestrator

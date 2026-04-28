@@ -170,6 +170,7 @@ class Orchestrator:
 
         txn_id = await self._transaction_repo.insert(txn_doc)
         logger.info("Transaction stored from Android notification: %s", txn_id)
+        await self._redis.invalidate_dashboard_cache(user_id)
 
         if txn_doc.direction == "inflow":
             await self._update_goal_progress(user_id, txn_doc.amount)
@@ -431,6 +432,7 @@ class Orchestrator:
 
         txn_id = await self._transaction_repo.insert(txn_doc)
         logger.info("Transaction stored via chat: %s", txn_id)
+        await self._redis.invalidate_dashboard_cache(user_id)
 
         await self._redis.set_last_transaction(user_id, txn_id)
 
@@ -1489,6 +1491,7 @@ class Orchestrator:
         if not deleted:
             return {"status": "error", "response_text": "Không xoá được giao dịch."}
 
+        await self._redis.invalidate_dashboard_cache(user_id)
         amount = original.get("amount", 0)
         icon = "➕" if original.get("direction") == "inflow" else "➖"
         merchant = original.get("merchant_name", "")
@@ -1546,10 +1549,11 @@ class Orchestrator:
                 "response_text": "Không cập nhật được giao dịch.",
             }
 
-        # Invalidate Redis so the next enrich re-evaluates with the correction
-        # sitting in Mongo history (user_corrected=True).
+        # Invalidate Redis: merchant cache (so next tagging re-evaluates) and
+        # dashboard cache (so mobile app sees updated category immediately).
         if merchant_name:
             await self._redis.delete_merchant_cache(merchant_name, user_id)
+        await self._redis.invalidate_dashboard_cache(user_id)
 
         # Record the correction for audit + future high-weight overrides.
         await self._correction_repo.insert(

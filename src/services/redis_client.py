@@ -115,3 +115,26 @@ class RedisClient:
         if count == 1:
             await self._redis.expire(key, ttl)
         return count
+
+    _DASHBOARD_TTL = 300  # 5 minutes
+
+    async def get_dashboard_cache(self, user_id: str) -> dict | None:
+        if not self._redis:
+            return None
+        raw = await self._redis.get(self._key("dashboard", user_id))
+        return json.loads(raw) if raw else None
+
+    async def set_dashboard_cache(
+        self, user_id: str, data: dict, ttl: int = _DASHBOARD_TTL
+    ) -> None:
+        if not self._redis:
+            return
+        await self._redis.set(
+            self._key("dashboard", user_id), json.dumps(data, default=str), ex=ttl
+        )
+
+    async def invalidate_dashboard_cache(self, user_id: str) -> None:
+        """Delete dashboard cache — call after any transaction write/delete/correction."""
+        if not self._redis:
+            return
+        await self._redis.delete(self._key("dashboard", user_id))

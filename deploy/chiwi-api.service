@@ -1,0 +1,22 @@
+[Unit]
+Description=ChiWi API Server
+After=network.target
+
+[Service]
+Type=simple
+User=nqhuy
+Group=nqhuy
+WorkingDirectory=/home/nqhuy/chiwi
+EnvironmentFile=/home/nqhuy/chiwi/.env
+ExecStart=/home/nqhuy/chiwi/.venv/bin/uvicorn src.main:app \
+    --host 127.0.0.1 \
+    --port 8000 \
+    --workers 1 \
+    --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

@@ -43,3 +43,6 @@ reports/
 
 # AI Coding Assistants
 .claude/
+
+# Local dev Docker Compose overrides — must not land on VM via git pull
+docker-compose.override.yml

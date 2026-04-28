@@ -1,4 +1,6 @@
-# docker-compose.yaml
+# Production docker-compose — uses pre-built registry images.
+# For local development, docker-compose.override.yml is auto-applied by
+# Docker Compose and adds build: targets + nginx + public port binding.
 
 x-logging: &default-logging
   driver: "json-file"
@@ -6,68 +8,37 @@ x-logging: &default-logging
     max-size: "10m"
     max-file: "3"
 
-x-common: &common-config
+x-app: &app-config
+  image: docker.io/nqh44/chiwi:latest
   restart: unless-stopped
   logging: *default-logging
   env_file:
     - .env
+  volumes:
+    - ./user_profiles.json:/data/user_profiles.json
 
 services:
-  mongo:
-    image: mongo:8
-    container_name: chiwi-mongo
-    ports:
-      - "127.0.0.1:27017:27017"
-    volumes:
-      - ./data/mongo:/data/db
-    restart: unless-stopped
-    logging: *default-logging
-
-  redis:
-    image: redis:8-alpine
-    container_name: chiwi-redis
-    ports:
-      - "127.0.0.1:6379:6379"
-    restart: unless-stopped
-    logging: *default-logging
-
   api:
-    <<: *common-config
-    build: .
-    image: nqh44/chiwi:local
+    <<: *app-config
     container_name: chiwi-api
     ports:
-      - "8000:8000"
-    depends_on:
-      redis:
-        condition: service_started
-      mongo:
-        condition: service_started
+      - "${API_PORT:-8000}:8000"
 
-  worker:
-    <<: *common-config
-    build: .
-    image: nqh44/chiwi:local
-    container_name: chiwi-worker
-    command: ["python", "-m", "src.worker"]
-    depends_on:
-      redis:
-        condition: service_started
-      mongo:
-        condition: service_started
+  # Runs behavioral nudges every hour (cron: 0 * * * *).
+  # Anti-spam in BehavioralAgent prevents duplicate nudges within 24 h.
+  worker-behavioral:
+    <<: *app-config
+    container_name: chiwi-worker-behavioral
+    command: supercronic /app/cron/worker-behavioral.cron
 
-  # Nginx Proxy cho Cloudflare
-  nginx:
-    image: nginx:alpine
-    container_name: chiwi-nginx
-    ports:
-      - "80:80"
-    volumes:
-      - ./nginx/conf.d:/etc/nginx/conf.d:ro
-    depends_on:
-      - api
-    restart: unless-stopped
-    logging: *default-logging
+  # Clears expired budget temp-overrides every hour (cron: 0 * * * *).
+  worker-budget:
+    <<: *app-config
+    container_name: chiwi-worker-budget
+    command: supercronic /app/cron/worker-budget.cron
 
-volumes:
-  # redis_data: # Nếu bạn muốn giữ data redis khi restart
+  # Sends the weekly summary report every Monday at 09:00 ICT (cron: 0 9 * * 1).
+  worker-reports:
+    <<: *app-config
+    container_name: chiwi-worker-reports
+    command: supercronic /app/cron/worker-reports.cron

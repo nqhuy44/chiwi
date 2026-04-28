@@ -333,6 +333,24 @@ async def _collect_triggers(user_id: str) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 
+async def _refresh_dashboard_caches() -> None:
+    """Proactively recompute and cache the dashboard for all profiled users.
+
+    Called after run_behavioral_analysis so the Android app home screen is
+    always warm when the user opens it after the worker cycle.
+    """
+    dashboard_service = container.dashboard_service
+    if not dashboard_service:
+        return
+    for user_id in configured_user_ids():
+        try:
+            await dashboard_service.invalidate(user_id)
+            await dashboard_service.get_or_compute(user_id)
+            logger.info("Dashboard cache refreshed for user_id=%s", user_id)
+        except Exception:
+            logger.exception("Dashboard cache refresh failed for user_id=%s", user_id)
+
+
 async def run_behavioral_analysis() -> None:
     """Fan-out: invoke the Behavioral Agent for every profiled user."""
     user_ids = configured_user_ids()
@@ -368,6 +386,8 @@ async def run_behavioral_analysis() -> None:
                 result.get("status"),
                 result.get("blocked_reason") or "-",
             )
+
+    await _refresh_dashboard_caches()
 
 
 async def run_weekly_reports() -> None:

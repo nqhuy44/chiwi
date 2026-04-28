@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Header, HTTPException
 
 from src.core.config import settings
 from src.core.dependencies import container
@@ -348,12 +348,87 @@ async def receive_notification(
     )
 
 
+async def _handle_message(message: dict, update_id: int | None) -> None:
+    """Process a Telegram text/voice message. Runs as a background task so
+    the webhook handler can return HTTP 200 to Telegram immediately."""
+    orchestrator = container.orchestrator
+    telegram_service = container.telegram
+
+    chat_id = str(message.get("chat", {}).get("id", ""))
+    from_id = str(message.get("from", {}).get("id", "")) or chat_id
+    text = message.get("text", "")
+    voice = message.get("voice")
+
+    # --- Command routing ---
+    if text and text.startswith("/"):
+        parts = text.split()
+        command = parts[0].split("@")[0].lower()  # strip @botname suffix
+        args = parts[1:]
+        await _handle_command(command, args, chat_id, from_id)
+        return
+
+    # --- Voice message ---
+    if voice:
+        file_id = voice.get("file_id", "")
+        mime_type = voice.get("mime_type", "audio/ogg")
+        audio_bytes = b""
+        try:
+            tg_file = await telegram_service.bot.get_file(file_id)
+            audio_bytes = bytes(await tg_file.download_as_bytearray())
+        except Exception:
+            logger.exception("Failed to download voice file_id=%s", file_id)
+            await telegram_service.send_message(
+                chat_id, "Xin lỗi, mình không tải được file âm thanh. Bạn thử nhắn chữ nhé?"
+            )
+            return
+
+        payload = {
+            "source": "telegram_voice",
+            "audio_bytes": audio_bytes,
+            "audio_mime_type": mime_type,
+            "chat_id": chat_id,
+            "user_id": from_id,
+        }
+        result = await orchestrator.route("voice", payload)
+        response_text = result.get("response_text")
+        inline_keyboard = result.get("inline_keyboard")
+        if response_text:
+            if inline_keyboard:
+                await telegram_service.send_message_with_keyboard(chat_id, response_text, inline_keyboard)
+            else:
+                await telegram_service.send_message(chat_id, response_text)
+        return
+
+    # --- Conversational path ---
+    payload = {
+        "source": "telegram",
+        "message": text,
+        "chat_id": chat_id,
+        "user_id": from_id,
+    }
+
+    event_type = await orchestrator.classify_event(payload)
+    result = await orchestrator.route(event_type, payload)
+
+    response_text = result.get("response_text")
+    inline_keyboard = result.get("inline_keyboard")
+    if response_text:
+        if inline_keyboard:
+            await telegram_service.send_message_with_keyboard(chat_id, response_text, inline_keyboard)
+        else:
+            await telegram_service.send_message(chat_id, response_text)
+
+
 @router.post("/telegram")
 async def telegram_webhook(
     update: dict,
+    background_tasks: BackgroundTasks,
     x_telegram_bot_api_secret_token: str | None = Header(default=None),
 ) -> dict:
     """Receive Telegram Bot API webhook updates.
+
+    Guards run synchronously (fast Redis ops, ~2ms total) so Telegram always
+    gets HTTP 200 quickly. Heavy processing (AI, DB) runs in a background task.
 
     Guards:
     0. Secret token validation — rejects requests without the registered secret.
@@ -371,17 +446,17 @@ async def telegram_webhook(
     update_id = update.get("update_id")
     logger.info("Telegram update received: %s", update_id)
 
-    # --- Inline button callback ---
+    # --- Inline button callback — background so answer_callback_query is fast ---
     callback_query = update.get("callback_query")
     if callback_query:
-        await _handle_callback_query(callback_query)
+        background_tasks.add_task(_handle_callback_query, callback_query)
         return {"ok": True}
 
     message = update.get("message", {})
     if not message:
         return {"ok": True}
 
-    # --- Guard 1: Stale message filter ---
+    # --- Guard 1: Stale message filter (pure arithmetic, no I/O) ---
     message_date = message.get("date", 0)
     age_seconds = int(_time.time()) - message_date
     max_age = settings.telegram_message_max_age_seconds
@@ -413,7 +488,7 @@ async def telegram_webhook(
 
     redis_client = container.redis
 
-    # --- Guard 2: Deduplication via Redis ---
+    # --- Guard 2: Deduplication via Redis (~1ms) ---
     if update_id and redis_client.is_connected:
         dedup_key = f"chiwi:telegram:update:{update_id}"
         already_seen = await redis_client._redis.set(
@@ -423,7 +498,7 @@ async def telegram_webhook(
             logger.warning("Duplicate update_id=%s, skipping", update_id)
             return {"ok": True}
 
-    # --- Guard 3: Rate limiting ---
+    # --- Guard 3: Rate limiting (~1ms) ---
     if redis_client.is_connected:
         count = await redis_client.increment_rate_limit(chat_id, ttl=60)
         if count > settings.telegram_rate_limit_per_minute:
@@ -434,66 +509,6 @@ async def telegram_webhook(
             )
             return {"ok": True}
 
-    orchestrator = container.orchestrator
-    telegram_service = container.telegram
-
-    # --- Command routing ---
-    if text and text.startswith("/"):
-        parts = text.split()
-        command = parts[0].split("@")[0].lower()  # strip @botname suffix
-        args = parts[1:]
-        await _handle_command(command, args, chat_id, from_id)
-        return {"ok": True}
-
-    # --- Voice message ---
-    if voice:
-        file_id = voice.get("file_id", "")
-        mime_type = voice.get("mime_type", "audio/ogg")
-        audio_bytes = b""
-        try:
-            tg_file = await telegram_service.bot.get_file(file_id)
-            audio_bytes = bytes(await tg_file.download_as_bytearray())
-        except Exception:
-            logger.exception("Failed to download voice file_id=%s", file_id)
-            await telegram_service.send_message(
-                chat_id, "Xin lỗi, mình không tải được file âm thanh. Bạn thử nhắn chữ nhé?"
-            )
-            return {"ok": True}
-
-        payload = {
-            "source": "telegram_voice",
-            "audio_bytes": audio_bytes,
-            "audio_mime_type": mime_type,
-            "chat_id": chat_id,
-            "user_id": from_id,
-        }
-        result = await orchestrator.route("voice", payload)
-        response_text = result.get("response_text")
-        inline_keyboard = result.get("inline_keyboard")
-        if response_text:
-            if inline_keyboard:
-                await telegram_service.send_message_with_keyboard(chat_id, response_text, inline_keyboard)
-            else:
-                await telegram_service.send_message(chat_id, response_text)
-        return {"ok": True}
-
-    # --- Conversational path ---
-    payload = {
-        "source": "telegram",
-        "message": text,
-        "chat_id": chat_id,
-        "user_id": from_id,
-    }
-
-    event_type = await orchestrator.classify_event(payload)
-    result = await orchestrator.route(event_type, payload)
-
-    response_text = result.get("response_text")
-    inline_keyboard = result.get("inline_keyboard")
-    if response_text:
-        if inline_keyboard:
-            await telegram_service.send_message_with_keyboard(chat_id, response_text, inline_keyboard)
-        else:
-            await telegram_service.send_message(chat_id, response_text)
-
+    # All guards passed — hand off to background task and return immediately
+    background_tasks.add_task(_handle_message, message, update_id)
     return {"ok": True}

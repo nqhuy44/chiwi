@@ -1,0 +1,18 @@
+[Unit]
+Description=ChiWi Background Worker
+After=network.target
+
+[Service]
+Type=simple
+User=nqhuy
+Group=nqhuy
+WorkingDirectory=/home/nqhuy/chiwi
+EnvironmentFile=/home/nqhuy/chiwi/.env
+ExecStart=/home/nqhuy/chiwi/.venv/bin/python -m src.worker
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

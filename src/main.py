@@ -5,7 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from src.api.routes import chat, health, webhook
+from src.api.routes import chat, health, mobile, webhook
 from src.core.config import settings
 from src.core.dependencies import container
 
@@ -45,3 +45,4 @@ app = FastAPI(
 app.include_router(health.router)
 app.include_router(webhook.router)
 app.include_router(chat.router)
+app.include_router(mobile.router)

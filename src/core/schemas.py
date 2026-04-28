@@ -144,3 +144,129 @@ class HealthResponse(BaseModel):
     status: str = "ok"
     service: str = "chiwi"
     version: str = "0.1.0"
+
+
+# --- Mobile API ---
+
+
+class MobilePeriodStats(BaseModel):
+    inflow: float
+    outflow: float
+    net: float
+    tx_count: int
+
+
+class MobileCategoryItem(BaseModel):
+    name: str
+    icon: str
+    amount: float
+    tx_count: int
+    percent: float
+
+
+class MobileTransactionItem(BaseModel):
+    id: str
+    amount: float
+    direction: Literal["inflow", "outflow"]
+    merchant: str | None
+    category: str | None
+    icon: str
+    note: str
+    timestamp: datetime
+    locked: bool
+    source: str
+
+
+class MobileBudgetAlert(BaseModel):
+    category: str
+    icon: str
+    spent: float
+    limit: float
+    percent_used: int
+
+
+class MobileUpcomingSubscription(BaseModel):
+    name: str
+    amount: float
+    due_in_days: int
+
+
+class MobileDashboardResponse(BaseModel):
+    computed_at: datetime
+    is_cached: bool
+    periods: dict[str, MobilePeriodStats]
+    top_categories: list[MobileCategoryItem]
+    recent_transactions: list[MobileTransactionItem]
+    budget_alerts: list[MobileBudgetAlert]
+    upcoming_subscriptions: list[MobileUpcomingSubscription]
+
+
+class MobileTransactionListResponse(BaseModel):
+    transactions: list[MobileTransactionItem]
+    next_cursor: str | None
+    total_in_period: int
+
+
+class MobileBudgetItem(BaseModel):
+    id: str
+    category: str
+    icon: str
+    period: str
+    limit: float
+    spent: float
+    remaining: float
+    percent_used: int
+    window_start: datetime
+    window_end: datetime
+    alert_enabled: bool
+
+
+class MobileBudgetListResponse(BaseModel):
+    budgets: list[MobileBudgetItem]
+
+
+class MobileGoalItem(BaseModel):
+    id: str
+    name: str
+    target_amount: float
+    saved_amount: float
+    percent_achieved: int
+    monthly_needed: float | None
+    deadline: datetime | None
+    on_track: bool
+
+
+class MobileGoalListResponse(BaseModel):
+    goals: list[MobileGoalItem]
+
+
+class MobileSubscriptionItem(BaseModel):
+    id: str
+    name: str
+    amount: float
+    period: str
+    next_charge_date: datetime
+    due_in_days: int
+    is_overdue: bool
+
+
+class MobileSubscriptionListResponse(BaseModel):
+    subscriptions: list[MobileSubscriptionItem]
+    monthly_total: float
+
+
+class MobileNudgeItem(BaseModel):
+    id: str
+    type: str
+    body: str
+    sent_at: datetime
+
+
+class MobileNudgeListResponse(BaseModel):
+    nudges: list[MobileNudgeItem]
+
+
+class MobileCategorySpendingResponse(BaseModel):
+    period: str
+    total_outflow: float
+    breakdown: list[MobileCategoryItem]
