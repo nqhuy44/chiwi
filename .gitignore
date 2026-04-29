@@ -37,6 +37,7 @@ htmlcov/
 # data
 ./data/
 config/user_profiles.json
+backups/
 
 # test reports
 reports/

@@ -10,6 +10,9 @@ import asyncio
 import logging
 from datetime import UTC, datetime
 
+from src.db.models.transaction import TransactionDocument
+from src.db.models.budget import BudgetDocument
+
 from src.core.categories import load_categories
 from src.core.profiles import get_profile
 from src.core.utils import get_budget_window, get_date_range
@@ -24,9 +27,9 @@ def _category_icon_map() -> dict[str, str]:
     return {c.name: c.icon_emoji for c in load_categories()}
 
 
-def _period_stats(txns: list[dict]) -> dict:
-    inflow = sum(t.get("amount", 0) for t in txns if t.get("direction") == "inflow")
-    outflow = sum(t.get("amount", 0) for t in txns if t.get("direction") == "outflow")
+def _period_stats(txns: list[TransactionDocument]) -> dict:
+    inflow = sum(t.amount for t in txns if t.direction == "inflow")
+    outflow = sum(t.amount for t in txns if t.direction == "outflow")
     return {
         "inflow": round(inflow),
         "outflow": round(outflow),
@@ -35,20 +38,20 @@ def _period_stats(txns: list[dict]) -> dict:
     }
 
 
-def _fmt_txn(doc: dict, icons: dict[str, str]) -> dict:
-    txn_id = str(doc.get("_id", ""))
-    cat = doc.get("category_id") or "Khác"
+def _fmt_txn(doc: TransactionDocument, icons: dict[str, str]) -> dict:
+    txn_id = str(doc.id)
+    cat = doc.category_id or "Khác"
     return {
         "id": txn_id,
-        "amount": doc.get("amount", 0),
-        "direction": doc.get("direction", "outflow"),
-        "merchant": doc.get("merchant_name"),
+        "amount": doc.amount,
+        "direction": doc.direction,
+        "merchant": doc.merchant_name,
         "category": cat,
         "icon": icons.get(cat, "❓"),
         "note": "",
-        "timestamp": doc.get("transaction_time", datetime.now(UTC)).isoformat(),
-        "locked": doc.get("locked", False),
-        "source": doc.get("source", ""),
+        "timestamp": doc.transaction_time.isoformat() if doc.transaction_time else datetime.now(UTC).isoformat(),
+        "locked": doc.locked,
+        "source": doc.source,
     }
 
 
@@ -83,7 +86,7 @@ class DashboardService:
 
     async def _compute(self, user_id: str) -> dict:
         icons = _category_icon_map()
-        profile = get_profile(user_id)
+        profile = await get_profile(user_id)
         tz = profile.timezone
 
         today_start, today_end = get_date_range("today", tz)
@@ -136,15 +139,15 @@ class DashboardService:
         now_utc = datetime.now(UTC)
         upcoming = []
         for sub in upcoming_subs:
-            ncd = sub.get("next_charge_date")
+            ncd = sub.next_charge_date
             if not ncd:
                 continue
             if ncd.tzinfo is None:
                 ncd = ncd.replace(tzinfo=UTC)
             due_in = max(0, (ncd - now_utc).days)
             upcoming.append({
-                "name": sub.get("name", ""),
-                "amount": sub.get("amount", 0),
+                "name": sub.name,
+                "amount": sub.amount,
                 "due_in_days": due_in,
             })
 
@@ -165,8 +168,8 @@ class DashboardService:
     async def _build_budget_alerts(
         self,
         user_id: str,
-        budgets: list[dict],
-        txns_by_period: dict[str, list[dict]],
+        budgets: list[BudgetDocument],
+        txns_by_period: dict[str, list[TransactionDocument]],
         icons: dict[str, str],
         tz: str,
     ) -> list[dict]:
@@ -174,21 +177,21 @@ class DashboardService:
         now_utc = datetime.now(UTC).replace(tzinfo=None)
 
         for budget in budgets:
-            if budget.get("is_silenced"):
+            if budget.is_silenced:
                 continue
-            period = budget.get("period", "monthly")
+            period = budget.period
             limit = effective_limit(budget, now_utc)
             if limit <= 0:
                 continue
-            category_id = budget.get("category_id", "")
+            category_id = budget.category_id
 
             if period in txns_by_period:
                 txns = txns_by_period[period]
                 spent = sum(
-                    t.get("amount", 0)
+                    t.amount
                     for t in txns
-                    if t.get("direction") == "outflow"
-                    and (t.get("category_id") or "").lower() == category_id.lower()
+                    if t.direction == "outflow"
+                    and (t.category_id or "").lower() == category_id.lower()
                 )
             else:
                 # yearly or unrecognized: query directly
@@ -199,10 +202,10 @@ class DashboardService:
                     user_id, b_start, None, limit=2000
                 )
                 spent = sum(
-                    t.get("amount", 0)
+                    t.amount
                     for t in txns
-                    if t.get("direction") == "outflow"
-                    and (t.get("category_id") or "").lower() == category_id.lower()
+                    if t.direction == "outflow"
+                    and (t.category_id or "").lower() == category_id.lower()
                 )
 
             pct = int((spent / limit) * 100)

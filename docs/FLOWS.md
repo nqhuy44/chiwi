@@ -17,7 +17,7 @@ sequenceDiagram
 
     Android->>GW: POST /api/webhook/notification {raw_text, bank_hint, timestamp}
     Note over Android: Android only captures + forwards.<br/>No parsing on mobile.
-    GW->>GW: Validate auth (X-User-Id)
+    GW->>GW: Validate JWT (Authorization Bearer)
     GW->>GW: Mask PII (account numbers, phone numbers)
     GW->>Orch: Forward masked payload
     Orch->>IA: Route to Ingestion Agent
@@ -310,8 +310,8 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-    A[docker-compose up] --> B[chiwi-redis starts]
-    A --> C[chiwi-mongo starts]
+    A[docker-compose up] --> B[redis starts]
+    A --> C[mongo starts]
     B & C --> D[chiwi-api starts]
     D --> E[Load .env config]
     E --> F[Connect MongoDB]
@@ -319,12 +319,16 @@ flowchart TD
     F & G --> H[Register Telegram webhook]
     H --> I[Start Uvicorn server]
     I --> J[Health check: GET /health]
-    A --> K[chiwi-worker starts]
-    K --> L[Register cron schedules]
-    L --> M["Daily: Behavioral analysis (08:00)"]
-    L --> N["Weekly: Report generation (Monday 09:00)"]
-    L --> O["Hourly: Budget check"]
+
+    A --> WB[chiwi-worker-behavioral starts]
+    A --> WBU[chiwi-worker-budget starts]
+    A --> WR[chiwi-worker-reports starts]
+    WB --> SB["supercronic worker-behavioral.cron\nFires daily at 08:00 ICT"]
+    WBU --> SBU["supercronic worker-budget.cron\nFires hourly at :00"]
+    WR --> SR["supercronic worker-reports.cron\nFires Monday 09:00 ICT"]
 ```
+
+Each worker is a separate container running the same image with a different `command`. `supercronic` runs in the foreground as PID 1, handles `SIGTERM` gracefully, and uses `CRON_TZ=Asia/Ho_Chi_Minh` so schedules are always in Vietnamese time regardless of VM timezone.
 
 ## 9. Analytics Flow (Comparison / Trend)
 
@@ -448,4 +452,66 @@ sequenceDiagram
     SpendingAvg-->>Orch: {category: {avg, current, delta_pct}}
     Orch->>TG: Comparison table with deltas
     TG->>User: "☕ Cafe: 850k (TB: 600k) ▲42%\n🍔 Ăn uống: 1.2M (TB: 1.5M) ▼20%"
+```
+## 12. User Authentication & JWT Flow (Phase B)
+
+```mermaid
+sequenceDiagram
+    participant App as 📱 Mobile App
+    participant GW as FastAPI Gateway
+    participant Auth as Auth Route
+    participant Mongo as MongoDB (Beanie)
+
+    Note over App, Mongo: Registration
+    App->>GW: POST /api/auth/register {user_id, password, display_name}
+    GW->>Auth: handle_register()
+    Auth->>Auth: Hash password (bcrypt)
+    Auth->>Mongo: UserDocument.insert()
+    Auth->>Mongo: UserProfileDocument.insert() (default values)
+    Auth-->>App: 201 Created
+
+    Note over App, Mongo: Login
+    App->>GW: POST /api/auth/login {user_id, password}
+    GW->>Auth: handle_login()
+    Auth->>Mongo: UserDocument.find(user_id)
+    Auth->>Auth: Verify hash (bcrypt)
+    Auth->>Auth: Generate JWT (Access + Refresh)
+    Auth->>Mongo: Store refresh_token_hash
+    Auth-->>App: 200 OK {access_token, refresh_token}
+
+    Note over App, Mongo: Authenticated Request
+    App->>GW: GET /api/mobile/dashboard (Auth: Bearer <token>)
+    GW->>GW: Validate JWT
+    GW->>Mongo: Beanie read...
+    GW->>Mongo: Beanie read...
+    GW-->>App: Dashboard Data
+```
+## 13. Data Privacy & Account Deletion Flow (Phase D)
+
+```mermaid
+sequenceDiagram
+    participant App as 📱 Mobile App
+    participant GW as FastAPI Gateway
+    participant UR as UserRepository
+    participant Mongo as MongoDB (Beanie)
+    participant Redis as Redis
+
+    App->>GW: DELETE /api/mobile/profile
+    GW->>GW: Validate JWT (extract user_id)
+    GW->>UR: delete_user_data(user_id)
+    
+    par Cascading Deletions
+        UR->>Mongo: TransactionDocument.delete_all(user_id)
+        UR->>Mongo: BudgetDocument.delete_all(user_id)
+        UR->>Mongo: GoalDocument.delete_all(user_id)
+        UR->>Mongo: NudgeDocument.delete_all(user_id)
+        UR->>Mongo: SubscriptionDocument.delete_all(user_id)
+        UR->>Mongo: CorrectionDocument.delete_all(user_id)
+        UR->>Mongo: UserProfileDocument.delete(user_id)
+    end
+
+    UR->>Mongo: UserDocument.delete(user_id)
+    UR->>Redis: Invalidate dashboard cache
+    UR-->>GW: Success
+    GW-->>App: 204 No Content
 ```

@@ -3,15 +3,9 @@
 Profiles live outside the codebase (default `config/user_profiles.json`)
 so the user can edit occupation, hobbies, and tone without redeploying.
 The path can be overridden via the `USER_PROFILES_FILE` env var.
-
-The file is a flat object keyed by ``telegram_user_id``. A ``"default"``
-key provides the fallback used when a specific user has no entry. Keys
-beginning with ``_`` (e.g. ``_example_*``) are ignored — useful for
-shipping example entries in the bundled file.
 """
 
 from __future__ import annotations
-
 import json
 import logging
 from functools import lru_cache
@@ -37,7 +31,7 @@ def _resolve_path() -> Path:
 
 
 @lru_cache(maxsize=1)
-def _load_raw() -> dict[str, dict]:
+def _load_raw_json() -> dict[str, dict]:
     path = _resolve_path()
     if not path.exists():
         logger.warning("User profiles file not found at %s", path)
@@ -49,30 +43,35 @@ def _load_raw() -> dict[str, dict]:
     return {k: v for k, v in raw.items() if not k.startswith("_")}
 
 
-def get_profile(user_id: str) -> UserProfile:
-    """Return the profile for ``user_id`` or the default profile.
-
-    Never raises — falls back to a blank :class:`UserProfile` if neither
-    the user nor the default is configured. Coercion errors in a single
-    profile entry log a warning and degrade to default.
-    """
-    raw = _load_raw()
+def _get_json_profile(user_id: str) -> UserProfile:
+    """Fallback: read from config/user_profiles.json during migration."""
+    raw = _load_raw_json()
     entry = raw.get(user_id) or raw.get(_DEFAULT_KEY) or {}
     try:
         return UserProfile(**entry)
     except Exception:
-        logger.exception("Invalid profile entry for user_id=%s", user_id)
+        logger.warning("Invalid JSON profile entry for user_id=%s", user_id)
         return UserProfile()
 
 
-def configured_user_ids() -> list[str]:
-    """Return the list of user_ids with an explicit profile (excluding default).
+async def get_profile(user_id: str) -> UserProfile:
+    """Return the profile for ``user_id`` or the default profile.
 
-    Used by the worker to fan out scheduled nudge analyses.
+    DB-first logic: check MongoDB via user_repo, fallback to JSON if missing.
     """
-    return [k for k in _load_raw().keys() if k != _DEFAULT_KEY]
+    # Lazy import to avoid circular dependency with dependencies.py -> dashboard.py -> profiles.py
+    from src.core.dependencies import container
+    try:
+        db_profile = await container.user_repo.get_profile(user_id)
+        if db_profile:
+            # db_profile is now a UserProfileDocument (Beanie/Pydantic v2)
+            return UserProfile.model_validate(db_profile.model_dump())
+    except Exception:
+        logger.exception("Error fetching profile from DB for user_id=%s", user_id)
+
+    return _get_json_profile(user_id)
 
 
-def reload() -> None:
-    """Drop the cached profiles. Call after editing the file at runtime."""
-    _load_raw.cache_clear()
+def reload_json() -> None:
+    """Drop the cached JSON profiles. Call after editing the file at runtime."""
+    _load_raw_json.cache_clear()

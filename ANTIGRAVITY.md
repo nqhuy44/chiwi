@@ -7,6 +7,7 @@ This file provides guidance to the Antigravity AI Agent when working with code i
 ChiWi — zero-effort, proactive personal finance via a multi-agent swarm.
 - **Communication**: All user-facing chat and explanation must be in **Vietnamese**.
 - **Documentation/Code**: All artifacts, plans, code, comments, logs, and markdown files must be in **English**.
+- **Auth**: JWT-based authentication for mobile (`/api/auth/*`). Refresh token rotation supported.
 - **Tone**: Short, professional, and straight to the point.
 
 Deeper design docs live in `docs/` (`ARCHITECTURE.md`, `AGENTS.md`, `DATABASE.md`, `FLOWS.md`, per-feature `FEATURE_*.md`). Prefer reading those for domain/flow questions before inferring from code.
@@ -51,7 +52,7 @@ FastAPI app (`src/main.py`) + a separate cron worker process (`src/worker.py`, s
 
 **PII Masking**: Before any LLM call that touches user content, run `mask_pii()` from `src/api/middleware/pii_mask.py`.
 
-**Persistence**: MongoDB (via `motor`) for durable data. Redis (`src/services/redis_client.py`) is for session state and hot caches.
+**Persistence**: MongoDB via **Beanie ODM** for durable, type-safe data storage. All models are defined in `src/db/models/`. Redis (`src/services/redis_client.py`) is for session state, rate limiting, and dashboard caches.
 
 **Schemas**: All cross-boundary data goes through Pydantic models in `src/core/schemas.py`.
 

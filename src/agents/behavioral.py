@@ -37,7 +37,7 @@ class BehavioralAgent:
     def __init__(
         self,
         gemini: GeminiService,
-        telegram: TelegramService,
+        telegram: TelegramService | None,
         nudge_repo: NudgeRepository,
     ) -> None:
         self._gemini = gemini
@@ -52,50 +52,63 @@ class BehavioralAgent:
             request.nudge_type,
         )
 
-        profile = get_profile(request.user_id)
+        profile = await get_profile(request.user_id)
 
         if profile.nudge_frequency == "off":
             return self._blocked("user_disabled_nudges")
 
         is_manual = request.trigger_data.get("source") == "telegram"
+
+        # Check daily limits and anti-spam (unless manual trigger)
         if not is_manual:
-            blocked = await self._spam_check(request)
-            if blocked:
-                return self._blocked(blocked)
+            blocked_reason = await self._spam_check(request)
+            if blocked_reason:
+                return self._blocked(blocked_reason)
 
-        result = await self._gemini.call_pro(
-            SYSTEM_PROMPT,
-            self._build_user_msg(request, profile),
+        # Generate message via Gemini
+        prompt = self._build_user_msg(request, profile)
+        message = await self._gemini.generate_text(
+            prompt, system_instruction=SYSTEM_PROMPT, model="flash"
         )
+        message = message.strip()
 
-        message = (result.get("message") or "").strip()
-        should_send = bool(result.get("should_send")) and message
-        if not should_send:
-            reason = result.get("blocked_reason") or "model_skipped"
-            return self._blocked(reason)
+        # Build Title based on type
+        title_map = {
+            "spending_spike": "🔥 Cảnh báo chi tiêu!",
+            "budget_warning": "⚠️ Sắp chạm trần ngân sách",
+            "goal_milestone": "🎯 Chúc mừng bạn!",
+            "subscription_reminder": "🔄 Nhắc lịch thanh toán",
+            "impulse_check": "🤔 Suy nghĩ kỹ nhé",
+            "saving_streak": "⭐ Phong độ tuyệt vời"
+        }
+        title = title_map.get(request.nudge_type, "ChiWi Insight")
 
-        send_result = await self._telegram.send_silent_message(
-            chat_id=request.chat_id, text=message
-        )
-        sent = bool(send_result)
-        if not sent:
-            return NudgeResult(
-                nudge_id="",
-                message=message,
-                sent=False,
-                blocked_reason="telegram_send_failed",
+        # Send via Telegram if available
+        sent_tg = False
+        chat_id = profile.extras.get("telegram_chat_id")
+        if self._telegram and chat_id:
+            send_result = await self._telegram.send_silent_message(
+                chat_id=chat_id, text=message
             )
+            sent_tg = bool(send_result)
 
-        nudge_id = await self._nudges.insert(
-            NudgeDocument(
-                user_id=request.user_id,
-                nudge_type=request.nudge_type,
-                message=message,
-                trigger_reason=str(request.trigger_data.get("reason", "")),
-            )
+        # Persist to DB for Mobile Notification History
+        # All nudges are visible on Mobile regardless of TG delivery status
+        doc = NudgeDocument(
+            user_id=request.user_id,
+            nudge_type=request.nudge_type,
+            title=title,
+            message=message,
+            channel="both" if sent_tg else "android",
+            metadata=request.trigger_data.get("metadata", {}),
+            trigger_reason=str(request.trigger_data.get("reason", ""))
         )
+        nudge_id = await self._nudges.insert(doc)
+
         return NudgeResult(
-            nudge_id=nudge_id, message=message, sent=True, blocked_reason=None
+            nudge_id=nudge_id,
+            message=message,
+            sent=sent_tg,
         )
 
     # -- internals -------------------------------------------------------

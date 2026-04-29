@@ -2,7 +2,7 @@
 
 ## Overview
 
-ChiWi uses **MongoDB** as primary data store and **Redis** for ephemeral state. MongoDB's schema-less nature handles unpredictable AI-generated metadata (dynamic tags, sentiment scores, behavioral flags).
+ChiWi uses **MongoDB** as primary data store, managed via **Beanie ODM** (Object Document Mapper) for type safety and Pydantic validation. **Redis** is used for ephemeral state and caching.
 
 ## Entity Relationship Diagram
 
@@ -17,10 +17,14 @@ erDiagram
     USER ||--o{ REPORT : "generated_for"
 
     USER {
-        ObjectId _id PK
-        string telegram_user_id UK
-        string telegram_chat_id
+        PydanticObjectId id PK
+        string user_id UK "platform-agnostic ID"
+        string hashed_password
+        string refresh_token_hash
         string display_name
+        string telegram_chat_id
+        list channels "['android', 'telegram']"
+        bool is_active
         datetime created_at
     }
 
@@ -91,24 +95,28 @@ erDiagram
 
 ### `users`
 
-Primary user record linked to Telegram identity.
+Primary user record.
 
 | Field | Type | Description |
 |---|---|---|
-| `_id` | ObjectId | Primary key |
-| `telegram_user_id` | string | **Unique**. Telegram user ID for auth |
-| `telegram_chat_id` | string | Telegram chat ID for messaging |
+| `id` | PydanticObjectId | Primary key (MongoDB `_id`) |
+| `user_id` | string | **Unique**. Primary identity (e.g. mobile UUID or Telegram ID) |
+| `hashed_password` | string | Bcrypt hash for mobile login |
+| `refresh_token_hash` | string | Hash of current refresh token |
 | `display_name` | string | User display name |
+| `telegram_chat_id` | string | Telegram chat ID for messaging |
+| `channels` | list | `["android", "telegram"]` |
+| `is_active` | bool | Account status |
 | `created_at` | datetime | Account creation timestamp |
 | `updated_at` | datetime | Last update timestamp |
 
-**Indexes**: `telegram_user_id` (unique)
+**Indexes**: `user_id` (unique)
 
 ---
 
-### `user_profiles` (config-driven)
+### `user_profiles`
 
-> **Stored in `config/user_profiles.json`**, not MongoDB. Edit the file to change personalisation without redeploying. Keyed by `telegram_user_id`. A `"default"` key provides fallback for unconfigured users. Keys starting with `_` are treated as comments and ignored by the loader.
+Personalization preferences stored in MongoDB. Migrated from `config/user_profiles.json` in Phase B.
 
 | Field | Type | Description |
 |---|---|---|
@@ -303,4 +311,27 @@ All keys prefixed with `chiwi:`.
 
 ## Migration Strategy
 
-Migrations handled at the application level via versioned scripts in `scripts/migrations/`. Each migration is idempotent and tracked in a `_migrations` collection.
+ChiWi uses **Beanie**'s built-in migration capabilities (where applicable) and custom idempotent scripts in `scripts/`.
+
+### Phase B Migration: Raw MongoDB → Beanie ODM
+1. **Model Definition**: All collections now have corresponding `Document` classes in `src/db/models/`.
+2. **Repository Refactor**: All data access moved from raw `motor` calls to `Beanie` methods (e.g., `UserDocument.find_one(...)`).
+3. **Validation**: Pydantic validation is enforced on every read/write, ensuring data integrity.
+4. **ID Handling**: All internal references use `PydanticObjectId` for compatibility.
+
+## Data Privacy & GDPR
+
+ChiWi implements a "Right to be Forgotten" policy via `UserRepository.delete_user_data(user_id)`.
+
+### Cascading Deletion
+When a user requests account deletion, the system performs a cascading delete across all related collections to ensure no orphaned PII remains:
+1. **Transactions**: All financial records.
+2. **Budgets**: All limits and `budget_events` (audit logs).
+3. **Goals**: All savings goals.
+4. **Nudges**: All behavioral interaction history.
+5. **Subscriptions**: All recurring charge trackers.
+6. **Corrections**: All manual category override history.
+7. **User Profile**: Personalization metadata.
+8. **User Account**: The primary identity record (invalidates JWTs).
+
+This logic is verified via unit tests using a mock database environment.

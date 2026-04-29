@@ -1,11 +1,14 @@
-from pydantic import BaseModel
+from beanie import Document
 
 
-class CategoryDocument(BaseModel):
+class CategoryDocument(Document):
     name: str
     icon_emoji: str
     parent_category: str | None = None
     is_system: bool = True
+
+    class Settings:
+        name = "categories"
 
 
 def default_categories() -> list["CategoryDocument"]:

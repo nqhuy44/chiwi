@@ -28,6 +28,7 @@ graph TD
 
     subgraph API Gateway
         B["🚀 FastAPI Gateway<br/>(Auth + PII Masking)"]
+        B_AUTH["🔑 JWT Auth<br/>(Register/Login/Refresh)"]
     end
 
     subgraph Orchestration Layer
@@ -44,84 +45,99 @@ graph TD
     end
 
     subgraph Data Layer
-        I[("🗄️ MongoDB<br/>(Transactions + Metadata)")]
-        J[("⚡ Redis<br/>(Session + State)")]
+        I[("🗄️ MongoDB<br/>(Beanie ODM + Pydantic)")]
+        J[("⚡ Redis<br/>(Session + State + Dash Cache)")]
     end
 
     subgraph Output Layer
-        K["📲 Telegram Bot<br/>(Notifications + Inline Buttons)"]
-        L["📈 Dashboard<br/>(Android app — separate repo)"]
+        K["📲 Telegram Bot<br/>(Optional Nudges)"]
+        L["📱 Notification Feed<br/>(Android Mobile App)"]
     end
 
-    A1 -->|POST /api/webhook/notification raw_text| B
+    A1 -->|POST /api/webhook/notification| B
     A2 & A3 --> B
-    B --> C
+    B <--> B_AUTH
+    B_AUTH --> C
     C --> D & E
     D & E --> F
     F --> I
     I --> G
-    G --> K
+    G --> K & L
     I --> H
     I --> I2
-    H --> K
-    I2 --> K
-    I -.->|future| L
+    H --> K & L
+    I2 --> K & L
     C <--> J
 ```
 
 ## Component Responsibilities
 
 ### 1. Input Layer
-Two active input channels:
-- **Telegram chat / voice** — direct messages and voice notes processed by the Conversational Agent.
-- **Android app** (separate repository) — captures raw bank notification text natively (NotificationListenerService) and forwards it verbatim to `POST /api/webhook/notification`. All AI parsing (Ingestion Agent, Gemini Flash) happens server-side so parsing improvements never require a mobile release. The Android app is responsible only for: notification capture, auth header injection, local offline queue (retry when backend unreachable), and future visualization.
+Three input channels:
+- **Android app** (Primary): Captures bank notifications and provides the primary UI. Fully functional via REST API.
+- **Telegram chat / voice** (Optional): Direct messages and voice notes. Logic is decoupled so the system works even if Telegram is disabled.
+- **API Clients**: Standard REST clients using the `/api/mobile/*` endpoints.
 
 ### 2. API Gateway (FastAPI)
-- **Authentication**: Validates Telegram `user_id` / `chat_id` against an allow-list.
-- **PII Masking**: Strips account numbers, phone numbers, and sensitive identifiers before forwarding to any LLM agent.
-- **Rate Limiting**: Protects against abuse and controls API cost.
+- **Authentication**: 
+    - **Phase A**: Validates users against `ALLOWED_USER_IDS` allow-list.
+- **Phase B (Complete)**: JWT-based authentication for mobile clients (`/api/auth/*`). Supports registration, login, and token rotation (access/refresh).
+- **Phase D (Complete)**: Data Portability & Privacy. Implements manual export (CSV/JSON), manual report/analysis triggers, and full account deletion (GDPR compliance).
+- **PII Masking**: Strips sensitive identifiers before forwarding to AI agents.
 - **Routing**: Dispatches incoming events to the Agent Orchestrator.
+- **Optionality**: Backend is fully functional even if Telegram is disabled (`TELEGRAM_BOT_TOKEN` not provided).
 
 ### 3. Agent Orchestrator
-The central brain that implements a **"Think-First"** routing pattern using plain async dispatch (not LangGraph):
-1. Classifies the incoming event type (notification, chat message, voice, scheduled trigger).
+The central brain that handles routing:
+1. Classifies the incoming event source (Android, Telegram, Scheduled).
 2. Selects the appropriate agent pipeline.
-3. Manages multi-agent collaboration and data handoff.
-4. Loads the user's profile timezone for correct day-boundary calculations.
+3. Manages collaborator handoff.
+4. Handles delivery channels (skips Telegram send if disabled, always ensures persistence for mobile feed).
 
 ### 4. Agent Swarm
 Six specialized agents, each with a distinct system prompt and toolset. See [AGENTS.md](./AGENTS.md) for full documentation.
 
 ### 5. Data Layer
-- **MongoDB**: Primary persistent storage for transactions, user profiles, category mappings, and agent-generated metadata.
-- **Redis**: Ephemeral state management — conversation history, session context, agent intermediate results, and rate-limit counters.
+- **MongoDB**: Primary persistent storage for transactions, user identities, personalization profiles, category mappings, and agent-generated metadata. Managed via **Beanie ODM** for type-safe document modeling and validation.
+- **Redis**: Ephemeral state management — conversation history, session context, merchant→category cache (7-day TTL), rate-limit counters, and the pre-computed mobile dashboard cache (`chiwi:dashboard:{user_id}`, 5-min TTL, invalidated on every transaction write/correction).
 
 ### 6. Output Layer
-- **Telegram Bot**: Primary user interface for confirmations, nudges, and quick interactions via inline buttons.
-- **Android App** (separate repository, in development): Two roles —
-  1. **Notification capture** (active): `NotificationListenerService` forwards raw bank notification text to `POST /api/webhook/notification`. All AI parsing stays on the backend.
-  2. **Visual dashboard** (planned): Charts, drill-downs, and transaction history views. This repo exposes the data via the existing MongoDB/REST layer; the Android app consumes it.
+- **Telegram Bot** (Optional): confirming, nudging, and quick interactions via inline buttons if a token is provided.
+- **Android App**: Consumes the `/api/mobile/*` REST endpoints. Unified notification feed and pre-computed dashboard.
+- Endpoints: `/api/mobile/dashboard`, `/transactions`, `/budgets`, `/goals`, `/subscriptions`, `/nudges`, `/profile`.
 
 ## Deployment Architecture
 
 ```mermaid
 graph LR
-    subgraph Docker Host ["🐳 Docker Compose (Self-Hosted)"]
-        APP["chiwi-api<br/>FastAPI + Uvicorn"]
-        MONGO["chiwi-mongo<br/>MongoDB 8.x"]
-        REDIS["chiwi-redis<br/>Redis 8.x"]
-        WORKER["chiwi-worker<br/>Scheduled Jobs"]
+    subgraph GH ["⚙️ GitHub Actions"]
+        CI["Build → Docker Hub push<br/>SSH deploy to VM"]
+    end
+
+    subgraph VM ["🖥️ VM (Docker Compose)"]
+        APP["chiwi-api<br/>FastAPI + Uvicorn :8000"]
+        WB["chiwi-worker-behavioral<br/>supercronic 08:00 daily"]
+        WBU["chiwi-worker-budget<br/>supercronic hourly"]
+        WR["chiwi-worker-reports<br/>supercronic Mon 09:00"]
+        MONGO[("MongoDB 8.x")]
+        REDIS[("Redis 8.x")]
+    end
+
+    subgraph Android ["📱 Android App (separate repo)"]
+        NOTIF["NotificationListenerService"]
+        DASH["Dashboard UI"]
     end
 
     TG["Telegram Bot API"] <--> APP
-    APP <--> MONGO
-    APP <--> REDIS
-    WORKER <--> MONGO
-    WORKER <--> REDIS
     GEMINI["Google Gemini API"] <--> APP
+    APP <--> MONGO & REDIS
+    WB & WBU & WR <--> MONGO & REDIS
+    NOTIF -->|POST /api/webhook/notification| APP
+    DASH -->|GET /api/mobile/*| APP
+    CI -->|docker compose up -d| VM
 ```
 
-All services are containerized and orchestrated via `docker-compose.yaml`. The system is designed to run entirely on a single self-hosted machine (e.g., home server, VPS).
+All four app containers share the same Docker image pinned to a commit SHA on each deploy. MongoDB and Redis are not exposed externally (bound to `127.0.0.1` only).
 
 ## Directory Structure
 
@@ -139,6 +155,7 @@ chiwi/
 │   ├── api/              # FastAPI endpoints
 │   │   ├── routes/
 │   │   │   ├── webhook.py  # Bank notification + Telegram bot commands
+│   │   │   ├── mobile.py   # /api/mobile/* REST endpoints for Android dashboard
 │   │   │   └── health.py
 │   │   └── middleware/
 │   │       └── pii_mask.py
@@ -153,25 +170,30 @@ chiwi/
 │   │   ├── spending_avg.py # Per-category baseline averages (ask_spending_vs_avg + spike detection)
 │   │   └── dependencies.py
 │   ├── db/               # Database models and repositories
-│   │   ├── models/
+│   │   ├── models/       # Beanie Document models (Pydantic-based)
 │   │   │   ├── transaction.py, budget.py, goal.py, nudge.py
 │   │   │   ├── subscription.py   # Recurring charge tracking
 │   │   │   ├── correction.py, report.py, category.py, user.py
-│   │   └── repositories/
+│   │   └── repositories/ # ODM-based data access layer
 │   │       ├── transaction_repo.py, budget_repo.py, goal_repo.py
 │   │       ├── nudge_repo.py, correction_repo.py, user_repo.py
-│   │       └── subscription_repo.py  # insert, find_by_merchant, find_upcoming, mark_charged
+│   │       └── subscription_repo.py
 │   ├── services/         # External service integrations
 │   │   ├── telegram.py
 │   │   ├── gemini.py
-│   │   └── redis_client.py
-│   ├── main.py           # FastAPI entrypoint
-│   └── worker.py         # Scheduled cron worker (behavioral nudges, budget/spending/goal trigger detection)
+│   │   ├── redis_client.py
+│   │   └── dashboard.py  # DashboardService: Redis-cached aggregation for /api/mobile/dashboard
+│   ├── main.py           # FastAPI entrypoint (Beanie initialization)
+│   └── worker.py         # Scheduled cron worker
 ├── config/
 │   ├── categories.json   # Spending categories (edit to add/rename)
 │   └── user_profiles.json # Per-user personalisation profiles (edit to configure)
 ├── tests/
 ├── docs/
+├── cron/
+│   ├── worker-behavioral.cron   # 0 8 * * *  (daily 08:00 ICT)
+│   ├── worker-budget.cron       # 0 * * * *  (hourly)
+│   └── worker-reports.cron      # 0 9 * * 1  (Monday 09:00 ICT)
 ├── docker-compose.yaml
 ├── Dockerfile
 ├── Makefile

@@ -56,7 +56,7 @@ class Orchestrator:
         self,
         gemini: GeminiService,
         redis: RedisClient,
-        telegram: TelegramService,
+        telegram: TelegramService | None,
         transaction_repo: TransactionRepository,
         budget_repo: BudgetRepository,
         budget_event_repo: BudgetEventRepository,
@@ -86,9 +86,10 @@ class Orchestrator:
             gemini=gemini, telegram=telegram, nudge_repo=nudge_repo
         )
 
-    def _get_user_chat_id(self, user_id: str) -> str:
+    async def _get_user_chat_id(self, user_id: str) -> str:
         """Return the Telegram chat_id for a user, sourced from their profile."""
-        return get_profile(user_id).chat_id
+        profile = await get_profile(user_id)
+        return profile.chat_id
 
     async def classify_event(self, event: dict) -> EventType:
         """Classify an incoming event to determine the agent pipeline."""
@@ -205,7 +206,8 @@ class Orchestrator:
         user_id = payload.get("user_id", "")
         chat_id = payload.get("chat_id", "")
         source = payload.get("source", "")
-        user_tz = get_profile(user_id).timezone
+        profile = await get_profile(user_id)
+        user_tz = profile.timezone
 
         raw_text = payload.get("message", "")
 
@@ -492,7 +494,8 @@ class Orchestrator:
 
         user_id = payload.get("user_id")
         period_str = payload.get("period", "today")
-        user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
+        profile = await get_profile(user_id or "")
+        user_tz = payload.get("user_timezone") or profile.timezone
 
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
@@ -528,7 +531,8 @@ class Orchestrator:
         period_str = payload.get("period", "this_week")
         compare_period = payload.get("compare_period")
         category_filter = payload.get("category_filter")
-        user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
+        profile = await get_profile(user_id or "")
+        user_tz = payload.get("user_timezone") or profile.timezone
         start_iso = payload.get("start_date")
         end_iso = payload.get("end_date")
 
@@ -608,7 +612,8 @@ class Orchestrator:
 
         user_id = payload.get("user_id")
         period_str = payload.get("period", "this_month")
-        user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
+        profile = await get_profile(user_id or "")
+        user_tz = payload.get("user_timezone") or profile.timezone
 
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
@@ -630,10 +635,10 @@ class Orchestrator:
         )
 
         total_inflow = sum(
-            t.get("amount", 0) for t in transactions if t.get("direction") == "inflow"
+            t.amount for t in transactions if t.direction == "inflow"
         )
         total_outflow = sum(
-            t.get("amount", 0) for t in transactions if t.get("direction") == "outflow"
+            t.amount for t in transactions if t.direction == "outflow"
         )
         net = total_inflow - total_outflow
 
@@ -682,7 +687,7 @@ class Orchestrator:
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
 
-        profile = get_profile(user_id)
+        profile = await get_profile(user_id)
         period_map = {"today": "daily", "this_week": "weekly", "this_month": "monthly"}
         avg_period = period_map.get(period, "weekly")
 
@@ -755,7 +760,8 @@ class Orchestrator:
         category_name = payload.get("category_name")
         limit_amount = payload.get("limit_amount")
         budget_period = payload.get("budget_period", "monthly")
-        user_tz = payload.get("user_timezone") or get_profile(user_id or "").timezone
+        profile = await get_profile(user_id or "")
+        user_tz = payload.get("user_timezone") or profile.timezone
 
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
@@ -808,11 +814,11 @@ class Orchestrator:
             "response_text": response,
         }
 
-    async def _find_budget_by_category(self, user_id: str, category_name: str) -> dict | None:
+    async def _find_budget_by_category(self, user_id: str, category_name: str) -> BudgetDocument | None:
         """Find an active budget matching the given category name."""
         budgets = await self._budget_repo.find_by_user(user_id)
         for b in budgets:
-            if b.get("category_id", "").lower() == category_name.lower():
+            if b.category_id.lower() == category_name.lower():
                 return b
         return None
 
@@ -824,7 +830,7 @@ class Orchestrator:
         if not user_id:
             return {"status": "error", "response_text": "Không tìm thấy user_id."}
 
-        profile = get_profile(user_id)
+        profile = await get_profile(user_id)
         tz_name = profile.timezone
         now = datetime.now(UTC).replace(tzinfo=None)
 
@@ -840,8 +846,8 @@ class Orchestrator:
 
         lines = []
         for b in budgets:
-            category = b.get("category_id", "?")
-            period = b.get("period", "monthly")
+            category = b.category_id
+            period = b.period
             start, end = get_budget_window(period, timezone=tz_name)
             if not start:
                 continue
@@ -850,17 +856,17 @@ class Orchestrator:
                 user_id=user_id, start_date=start, end_date=now, limit=200
             )
             spent = sum(
-                t.get("amount", 0) for t in txns
-                if t.get("direction") == "outflow"
-                and (t.get("category_id") or "").lower() == category.lower()
+                t.amount for t in txns
+                if t.direction == "outflow"
+                and (t.category_id or "").lower() == category.lower()
             )
             limit = effective_limit(b, now)
             pct = min(round(spent / limit * 100), 999) if limit > 0 else 0
             bar = "🟩" * min(pct // 20, 5)
             bar = bar or "⬜"
             period_label = {"daily": "hôm nay", "weekly": "tuần", "monthly": "tháng"}.get(period, period)
-            silence_tag = " 🔕" if b.get("is_silenced") else ""
-            temp_tag = f" *(tạm {effective_limit(b, now):,.0f}đ)*" if b.get("temp_limit") else ""
+            silence_tag = " 🔕" if b.is_silenced else ""
+            temp_tag = f" *(tạm {limit:,.0f}đ)*" if b.temp_limit else ""
             lines.append(
                 f"{bar} <b>{category}</b>{silence_tag} — "
                 f"{spent:,.0f}/{limit:,.0f}đ ({pct}%) / {period_label}{temp_tag}"
@@ -893,13 +899,13 @@ class Orchestrator:
                 "response_text": f"Không tìm thấy ngân sách <b>{category_name}</b> đang hoạt động.",
             }
 
-        budget_id = str(budget["_id"])
-        old_limit = budget.get("limit_amount", 0)
+        budget_id = str(budget.id)
+        old_limit = budget.limit_amount or 0.0
         await self._budget_repo.update_limit(budget_id, user_id, float(new_limit))
         await self._budget_event_repo.insert(BudgetEventDocument(
             user_id=user_id,
             budget_id=budget_id,
-            category_id=budget["category_id"],
+            category_id=budget.category_id,
             event_type="limit_updated",
             old_value={"limit_amount": old_limit},
             new_value={"limit_amount": float(new_limit)},
@@ -909,7 +915,7 @@ class Orchestrator:
         return {
             "status": "success",
             "response_text": (
-                f"Đã {direction} ngân sách <b>{budget['category_id']}</b> "
+                f"Đã {direction} ngân sách <b>{budget.category_id}</b> "
                 f"từ {old_limit:,.0f}đ → <b>{float(new_limit):,.0f}đ</b> nhé!"
             ),
         }
@@ -939,19 +945,19 @@ class Orchestrator:
                 "response_text": f"Không tìm thấy ngân sách <b>{category_name}</b> đang hoạt động.",
             }
 
-        profile = get_profile(user_id)
-        period = budget.get("period", "weekly")
+        profile = await get_profile(user_id)
+        period = budget.period
         _, expires_at = get_budget_window(period, timezone=profile.timezone)
         if not expires_at:
             return {"status": "error", "response_text": "Không thể tính ngày hết hạn tạm thời."}
 
-        budget_id = str(budget["_id"])
-        old_limit = budget.get("limit_amount", 0)
+        budget_id = str(budget.id)
+        old_limit = budget.limit_amount or 0.0
         await self._budget_repo.set_temp_override(budget_id, user_id, float(temp_limit), expires_at, reason)
         await self._budget_event_repo.insert(BudgetEventDocument(
             user_id=user_id,
             budget_id=budget_id,
-            category_id=budget["category_id"],
+            category_id=budget.category_id,
             event_type="temp_override_set",
             old_value={"limit_amount": old_limit},
             new_value={"temp_limit": float(temp_limit), "expires_at": expires_at.isoformat()},
@@ -963,7 +969,7 @@ class Orchestrator:
         return {
             "status": "success",
             "response_text": (
-                f"Đã tăng tạm ngân sách <b>{budget['category_id']}</b> "
+                f"Đã tăng tạm ngân sách <b>{budget.category_id}</b> "
                 f"lên <b>{float(temp_limit):,.0f}đ</b> cho {period_label} "
                 f"(hết hạn {expires_str}). "
                 f"Ngân sách gốc {old_limit:,.0f}đ sẽ tự khôi phục sau đó nhé! 👍"
@@ -988,12 +994,12 @@ class Orchestrator:
                 "response_text": f"Không tìm thấy ngân sách <b>{category_name}</b>.",
             }
 
-        budget_id = str(budget["_id"])
+        budget_id = str(budget.id)
         await self._budget_repo.silence(budget_id, user_id)
         await self._budget_event_repo.insert(BudgetEventDocument(
             user_id=user_id,
             budget_id=budget_id,
-            category_id=budget["category_id"],
+            category_id=budget.category_id,
             event_type="silenced",
             old_value={"is_silenced": False},
             new_value={"is_silenced": True},
@@ -1002,7 +1008,7 @@ class Orchestrator:
         return {
             "status": "success",
             "response_text": (
-                f"Đã tắt thông báo ngân sách <b>{budget['category_id']}</b>. "
+                f"Đã tắt thông báo ngân sách <b>{budget.category_id}</b>. "
                 "Mai vẫn theo dõi nhưng sẽ không nhắc nữa nhé. 🔕"
             ),
         }
@@ -1025,12 +1031,12 @@ class Orchestrator:
                 "response_text": f"Không tìm thấy ngân sách <b>{category_name}</b> đang hoạt động.",
             }
 
-        budget_id = str(budget["_id"])
+        budget_id = str(budget.id)
         await self._budget_repo.deactivate(budget_id, user_id)
         await self._budget_event_repo.insert(BudgetEventDocument(
             user_id=user_id,
             budget_id=budget_id,
-            category_id=budget["category_id"],
+            category_id=budget.category_id,
             event_type="disabled",
             old_value={"is_active": True},
             new_value={"is_active": False},
@@ -1039,7 +1045,7 @@ class Orchestrator:
         return {
             "status": "success",
             "response_text": (
-                f"Đã tắt ngân sách <b>{budget['category_id']}</b>. "
+                f"Đã tắt ngân sách <b>{budget.category_id}</b>. "
                 "Lịch sử chi tiêu vẫn được giữ lại nhé."
             ),
         }
@@ -1169,12 +1175,12 @@ class Orchestrator:
         period_label = {"monthly": "tháng", "weekly": "tuần", "yearly": "năm"}
         lines = []
         for s in subs:
-            period_str = period_label.get(s.get("period", "monthly"), "tháng")
-            next_date = s.get("next_charge_date")
+            period_str = period_label.get(s.period, "tháng")
+            next_date = s.next_charge_date
             next_str = next_date.strftime("%d/%m/%Y") if next_date else "?"
             lines.append(
-                f"🔄 <b>{s['name']}</b> — "
-                f"{s['amount']:,.0f}đ/{period_str} "
+                f"🔄 <b>{s.name}</b> — "
+                f"{s.amount:,.0f}đ/{period_str} "
                 f"(kỳ tới: {next_str})"
             )
 
@@ -1209,11 +1215,11 @@ class Orchestrator:
                 ),
             }
 
-        sub_id = str(sub["_id"])
+        sub_id = str(sub.id)
         await self._subscription_repo.mark_charged(sub_id, user_id, datetime.now(UTC))
-        next_date = sub.get("next_charge_date")
+        next_date = sub.next_charge_date
         from datetime import timedelta
-        period = sub.get("period", "monthly")
+        period = sub.period
         days = {"weekly": 7, "monthly": 30, "yearly": 365}.get(period, 30)
         next_date_advanced = (next_date + timedelta(days=days)) if next_date else None
         next_str = next_date_advanced.strftime("%d/%m/%Y") if next_date_advanced else "?"
@@ -1222,7 +1228,7 @@ class Orchestrator:
         return {
             "status": "success",
             "response_text": (
-                f"Đã đánh dấu <b>{sub['name']}</b> đã thanh toán kỳ này! "
+                f"Đã đánh dấu <b>{sub.name}</b> đã thanh toán kỳ này! "
                 f"Kỳ tới: <b>{next_str}</b> 🔄"
             ),
         }
@@ -1250,13 +1256,13 @@ class Orchestrator:
                 ),
             }
 
-        sub_id = str(sub["_id"])
+        sub_id = str(sub.id)
         await self._subscription_repo.deactivate(sub_id, user_id, reason="manual")
         logger.info("Subscription '%s' cancelled by user %s", merchant_name, user_id)
         return {
             "status": "success",
             "response_text": (
-                f"Đã huỷ theo dõi <b>{sub['name']}</b>. "
+                f"Đã huỷ theo dõi <b>{sub.name}</b>. "
                 "Các giao dịch trước vẫn được lưu lại đầy đủ nhé."
             ),
         }
@@ -1296,11 +1302,11 @@ class Orchestrator:
                 ),
             }
 
-        old_sub_id = str(old_sub["_id"])
+        old_sub_id = str(old_sub.id)
         now = datetime.now(UTC)
         await self._subscription_repo.deactivate(old_sub_id, user_id, reason="replaced", cancelled_at=now)
 
-        period = new_period or old_sub.get("period", "monthly")
+        period = new_period or old_sub.period
         next_charge: datetime | None = None
         if new_next_date_raw:
             try:
@@ -1313,12 +1319,12 @@ class Orchestrator:
 
         new_sub = SubscriptionDocument(
             user_id=user_id,
-            name=old_sub.get("name", merchant_name),
-            merchant_name=old_sub.get("merchant_name", merchant_name),
+            name=old_sub.name or merchant_name,
+            merchant_name=old_sub.merchant_name or merchant_name,
             amount=float(new_amount),
             period=period,
             next_charge_date=next_charge,
-            source=old_sub.get("source", "manual"),
+            source=old_sub.source or "manual",
             replaces_id=old_sub_id,
         )
         new_sub_id = await self._subscription_repo.insert(new_sub)
@@ -1357,7 +1363,7 @@ class Orchestrator:
         """
         sub = await self._subscription_repo.find_by_merchant(user_id, merchant_name)
         if sub:
-            sub_id = str(sub["_id"])
+            sub_id = str(sub.id)
             await self._subscription_repo.mark_charged(sub_id, user_id, charged_at)
             if transaction_id:
                 await self._transaction_repo.set_subscription_id(transaction_id, sub_id)
@@ -1381,15 +1387,16 @@ class Orchestrator:
                 "text": "✅ Đăng ký theo dõi",
                 "callback_data": f"sub_reg|{safe_merchant}|{int(amount)}|{detected_period}",
             }]]
-            await self._telegram.send_message_with_keyboard(
-                chat_id=chat_id,
-                text=(
-                    f"🔄 <b>{merchant_name}</b> có vẻ là phí định kỳ "
-                    f"({amount:,.0f}đ/{period_label}). "
-                    "Bấm nút để đăng ký và Mai sẽ nhắc trước kỳ trừ tiền!"
-                ),
-                keyboard=keyboard,
-            )
+            if self._telegram:
+                await self._telegram.send_message_with_keyboard(
+                    chat_id=chat_id,
+                    text=(
+                        f"🔄 <b>{merchant_name}</b> có vẻ là phí định kỳ "
+                        f"({amount:,.0f}đ/{period_label}). "
+                        "Bấm nút để đăng ký và Mai sẽ nhắc trước kỳ trừ tiền!"
+                    ),
+                    keyboard=keyboard,
+                )
             logger.info(
                 "Recurring pattern detected for '%s' user=%s — prompted user",
                 merchant_name,
@@ -1397,11 +1404,11 @@ class Orchestrator:
             )
 
     @staticmethod
-    def _detect_subscription_period(history: list[dict]) -> str:
+    def _detect_subscription_period(history: list[TransactionDocument]) -> str:
         """Infer weekly / monthly / yearly from average interval between outflow charges."""
         dates = sorted(
-            h["transaction_time"] for h in history
-            if h.get("direction") == "outflow" and h.get("transaction_time")
+            h.transaction_time for h in history
+            if h.direction == "outflow" and h.transaction_time
         )
         if len(dates) < 2:
             return "monthly"
@@ -1414,7 +1421,7 @@ class Orchestrator:
         return "yearly"
 
     @staticmethod
-    def _is_recurring_pattern(history: list[dict], current_amount: float) -> bool:
+    def _is_recurring_pattern(history: list[TransactionDocument], current_amount: float) -> bool:
         """Return True when history shows ≥2 prior outflow charges with similar
         amounts (~±30%) and intervals of 7–40 days (weekly/monthly cadence).
         """
@@ -1423,20 +1430,20 @@ class Orchestrator:
 
         outflow = [
             h for h in history
-            if h.get("direction") == "outflow" and h.get("amount", 0) > 0
+            if h.direction == "outflow" and h.amount > 0
         ]
         if len(outflow) < 2:
             return False
 
         # Amount similarity: all within ±30% of current_amount
         lo, hi = current_amount * 0.7, current_amount * 1.3
-        similar = [h for h in outflow if lo <= h.get("amount", 0) <= hi]
+        similar = [h for h in outflow if lo <= h.amount <= hi]
         if len(similar) < 2:
             return False
 
         # Interval check: gaps between sorted charge dates 7–40 days
         dates = sorted(
-            h["transaction_time"] for h in similar if h.get("transaction_time")
+            h.transaction_time for h in similar if h.transaction_time
         )
         if len(dates) < 2:
             return False
@@ -1477,11 +1484,11 @@ class Orchestrator:
             return {"status": "error", "response_text": "ID giao dịch không hợp lệ."}
 
         original = await self._transaction_repo.find_by_id(transaction_id)
-        if not original or original.get("user_id") != user_id:
+        if not original or original.user_id != user_id:
             logger.warning("Delete ownership violation: user=%s txn=%s", user_id, transaction_id)
             return {"status": "error", "response_text": "Không tìm thấy giao dịch."}
 
-        if original.get("locked"):
+        if original.locked:
             return {
                 "status": "locked",
                 "response_text": "🔒 Giao dịch này đã được xác nhận, không thể xoá.",
@@ -1492,9 +1499,9 @@ class Orchestrator:
             return {"status": "error", "response_text": "Không xoá được giao dịch."}
 
         await self._redis.invalidate_dashboard_cache(user_id)
-        amount = original.get("amount", 0)
-        icon = "➕" if original.get("direction") == "inflow" else "➖"
-        merchant = original.get("merchant_name", "")
+        amount = original.amount
+        icon = "➕" if original.direction == "inflow" else "➖"
+        merchant = original.merchant_name or ""
         summary = f"{icon} {amount:,.0f}đ"
         if merchant:
             summary += f" | {merchant}"
@@ -1525,20 +1532,20 @@ class Orchestrator:
                 "response_text": "Không tìm thấy giao dịch để sửa.",
             }
 
-        if original.get("user_id") != user_id:
+        if original.user_id != user_id:
             logger.warning(
                 "Correction ownership violation: user=%s attempted to update txn=%s owned by %s",
                 user_id,
                 transaction_id,
-                original.get("user_id"),
+                original.user_id,
             )
             return {
                 "status": "error",
                 "response_text": "Không tìm thấy giao dịch để sửa.",
             }
 
-        old_category = original.get("category_id")
-        merchant_name = original.get("merchant_name")
+        old_category = original.category_id
+        merchant_name = original.merchant_name
 
         updated = await self._transaction_repo.update_category(
             transaction_id, new_category, user_id
@@ -1591,10 +1598,10 @@ class Orchestrator:
         try:
             goals = await self._goal_repo.find_by_user(user_id, status="active")
             for goal in goals:
-                goal_id = str(goal["_id"])
-                new_amount = goal.get("current_amount", 0.0) + inflow_amount
+                goal_id = str(goal.id)
+                new_amount = (goal.current_amount or 0.0) + inflow_amount
                 await self._goal_repo.update_progress(goal_id, user_id, new_amount)
-                if new_amount >= goal.get("target_amount", float("inf")):
+                if new_amount >= goal.target_amount:
                     await self._goal_repo.set_status(goal_id, user_id, "achieved")
                     logger.info("Goal %s achieved for user %s", goal_id, user_id)
         except Exception:

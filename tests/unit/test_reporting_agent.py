@@ -9,7 +9,7 @@ from src.core.schemas import ReportRequest
 @pytest.fixture
 def mock_gemini():
     gemini = AsyncMock()
-    gemini.call_pro.return_value = {"report_text": "Báo cáo test: Hôm nay bạn đã chi tiêu 50k."}
+    gemini.call_flash.return_value = {"report_text": "Báo cáo test: Hôm nay bạn đã chi tiêu 50k."}
     return gemini
 
 @pytest.fixture
@@ -33,8 +33,8 @@ async def test_generate_report_success(reporting_agent, mock_gemini):
     assert result["data"]["transaction_count"] == 2
     assert "Báo cáo test" in result["report_text"]
     
-    mock_gemini.call_pro.assert_called_once()
-    call_args = mock_gemini.call_pro.call_args[0]
+    mock_gemini.call_flash.assert_called_once()
+    call_args = mock_gemini.call_flash.call_args[0]
     prompt = call_args[1]
-    assert "150,000" in prompt
+    assert "150000" in prompt
     assert "Highlands" in prompt

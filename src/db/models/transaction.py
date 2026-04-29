@@ -1,10 +1,10 @@
 from datetime import UTC, datetime
 from typing import Literal
+from beanie import Document
+from pydantic import Field
 
-from pydantic import BaseModel, Field
 
-
-class TransactionDocument(BaseModel):
+class TransactionDocument(Document):
     user_id: str
     source: Literal["notification", "chat", "voice", "manual"]
     amount: float
@@ -21,3 +21,6 @@ class TransactionDocument(BaseModel):
     locked: bool = False  # user-confirmed; blocks edits and deletes
     ai_metadata: dict = Field(default_factory=dict)
     subscription_id: str | None = None   # set when this charge matches a registered subscription
+
+    class Settings:
+        name = "transactions"

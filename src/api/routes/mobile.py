@@ -1,23 +1,36 @@
 """Mobile API routes — fast read-only endpoints for the Android app.
 
 All endpoints are authenticated via X-User-Id header (same allow-list as the
-notification webhook). No AI is invoked here; every response is a direct
-MongoDB read or a pre-computed Redis-cached dashboard payload.
+notification webhook). No AI is invoked on read endpoints; every read response
+is a direct MongoDB read or a pre-computed Redis-cached dashboard payload.
+
+The ``POST /chat`` endpoint is the only write-capable endpoint here — it
+mirrors the Telegram conversational flow, accepting free-form text and
+returning structured JSON instead of sending a Telegram message.
 """
 
+import io
+import csv
 import logging
 from datetime import UTC, datetime
-
-from fastapi import APIRouter, Header, HTTPException, Query
+from typing import Literal
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import StreamingResponse
+from src.api.dependencies.auth import get_current_user
+from src.db.models.transaction import TransactionDocument
 
 from src.core.categories import load_categories
 from src.core.config import settings
 from src.core.dependencies import container
+from src.core.profiles import get_profile
 from src.core.schemas import (
     MobileBudgetItem,
     MobileBudgetListResponse,
     MobileCategoryItem,
     MobileCategorySpendingResponse,
+    MobileChatAction,
+    MobileChatRequest,
+    MobileChatResponse,
     MobileDashboardResponse,
     MobileGoalItem,
     MobileGoalListResponse,
@@ -27,6 +40,8 @@ from src.core.schemas import (
     MobileSubscriptionListResponse,
     MobileTransactionItem,
     MobileTransactionListResponse,
+    MobileUnreadCountResponse,
+    UserProfile,
 )
 from src.core.utils import get_budget_window, get_date_range
 from src.db.repositories.budget_repo import effective_limit
@@ -36,48 +51,45 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mobile", tags=["mobile"])
 
 
-def _require_user(x_user_id: str = Header(...)) -> str:
-    if x_user_id not in settings.allowed_user_ids:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-    return x_user_id
+# _require_user is deprecated in favor of get_current_user dependency
 
 
 def _category_icon_map() -> dict[str, str]:
     return {c.name: c.icon_emoji for c in load_categories()}
 
 
-def _fmt_txn(doc: dict, icons: dict[str, str]) -> MobileTransactionItem:
-    cat = doc.get("category_id") or "Khác"
-    ts = doc.get("transaction_time", datetime.now(UTC))
+def _fmt_txn(doc: TransactionDocument, icons: dict[str, str]) -> MobileTransactionItem:
+    cat = doc.category_id or "Khác"
+    ts = doc.transaction_time or datetime.now(UTC)
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
     return MobileTransactionItem(
-        id=str(doc.get("_id", "")),
-        amount=doc.get("amount", 0),
-        direction=doc.get("direction", "outflow"),
-        merchant=doc.get("merchant_name"),
+        id=str(doc.id),
+        amount=doc.amount,
+        direction=doc.direction,
+        merchant=doc.merchant_name,
         category=cat,
         icon=icons.get(cat, "❓"),
         note="",
         timestamp=ts,
-        locked=doc.get("locked", False),
-        source=doc.get("source", ""),
+        locked=doc.locked,
+        source=doc.source,
     )
 
 
 @router.get("/dashboard", response_model=MobileDashboardResponse)
-async def get_dashboard(x_user_id: str = Header(...)) -> MobileDashboardResponse:
+async def get_dashboard(user_id: str = Depends(get_current_user)) -> MobileDashboardResponse:
     """Home-screen payload: period totals, top categories, recent transactions,
     budget alerts, and upcoming subscriptions. Cached in Redis for 5 minutes;
     invalidated on every transaction write/delete/correction."""
-    _require_user(x_user_id)
-    data = await container.dashboard_service.get_or_compute(x_user_id)
+    # Authenticated via JWT
+    data = await container.dashboard_service.get_or_compute(user_id)
     return MobileDashboardResponse(**data)
 
 
 @router.get("/transactions", response_model=MobileTransactionListResponse)
 async def list_transactions(
-    x_user_id: str = Header(...),
+    user_id: str = Depends(get_current_user),
     period: str = Query("this_month"),
     category: str | None = Query(None),
     direction: str | None = Query(None, pattern="^(inflow|outflow)$"),
@@ -86,7 +98,7 @@ async def list_transactions(
 ) -> MobileTransactionListResponse:
     """Paginated transaction list. ``cursor`` is the ``id`` of the last item
     on the previous page; omit for the first page."""
-    _require_user(x_user_id)
+    # Authenticated via JWT
     icons = _category_icon_map()
 
     start_date, end_date = get_date_range(period)
@@ -94,7 +106,7 @@ async def list_transactions(
         raise HTTPException(status_code=400, detail=f"Unsupported period: {period}")
 
     txns = await container.transaction_repo.find_paged(
-        user_id=x_user_id,
+        user_id=user_id,
         start_date=start_date,
         end_date=end_date,
         category_id=category,
@@ -104,14 +116,14 @@ async def list_transactions(
     )
 
     total = await container.transaction_repo.count_in_period(
-        user_id=x_user_id,
+        user_id=user_id,
         start_date=start_date,
         end_date=end_date,
         category_id=category,
         direction=direction,
     )
 
-    next_cursor = str(txns[-1]["_id"]) if len(txns) == limit else None
+    next_cursor = str(txns[-1].id) if len(txns) == limit else None
 
     return MobileTransactionListResponse(
         transactions=[_fmt_txn(t, icons) for t in txns],
@@ -121,31 +133,31 @@ async def list_transactions(
 
 
 @router.get("/budgets", response_model=MobileBudgetListResponse)
-async def list_budgets(x_user_id: str = Header(...)) -> MobileBudgetListResponse:
+async def list_budgets(user_id: str = Depends(get_current_user)) -> MobileBudgetListResponse:
     """Active budgets with current spend vs limit for the ongoing cycle."""
-    _require_user(x_user_id)
+    # Authenticated via JWT
     icons = _category_icon_map()
-    budgets = await container.budget_repo.find_by_user(x_user_id)
+    budgets = await container.budget_repo.find_by_user(user_id)
     now_utc = datetime.now(UTC).replace(tzinfo=None)
     items: list[MobileBudgetItem] = []
 
     for b in budgets:
-        period = b.get("period", "monthly")
+        period = b.period
         w_start, w_end = get_budget_window(period)
         if not w_start or not w_end:
             continue
 
-        category_id = b.get("category_id", "")
+        category_id = b.category_id
         limit = effective_limit(b, now_utc)
 
         txns = await container.transaction_repo.find_by_user(
-            user_id=x_user_id, start_date=w_start, end_date=w_end, limit=1000
+            user_id=user_id, start_date=w_start, end_date=w_end, limit=1000
         )
         spent = sum(
-            t.get("amount", 0)
+            t.amount
             for t in txns
-            if t.get("direction") == "outflow"
-            and (t.get("category_id") or "").lower() == category_id.lower()
+            if t.direction == "outflow"
+            and (t.category_id or "").lower() == category_id.lower()
         )
 
         remaining = max(0.0, limit - spent)
@@ -158,7 +170,7 @@ async def list_budgets(x_user_id: str = Header(...)) -> MobileBudgetListResponse
 
         items.append(
             MobileBudgetItem(
-                id=str(b.get("_id", "")),
+                id=str(b.id),
                 category=category_id,
                 icon=icons.get(category_id, "❓"),
                 period=period,
@@ -168,7 +180,7 @@ async def list_budgets(x_user_id: str = Header(...)) -> MobileBudgetListResponse
                 percent_used=pct,
                 window_start=w_start,
                 window_end=w_end,
-                alert_enabled=not b.get("is_silenced", False),
+                alert_enabled=not b.is_silenced,
             )
         )
 
@@ -176,18 +188,18 @@ async def list_budgets(x_user_id: str = Header(...)) -> MobileBudgetListResponse
 
 
 @router.get("/goals", response_model=MobileGoalListResponse)
-async def list_goals(x_user_id: str = Header(...)) -> MobileGoalListResponse:
+async def list_goals(user_id: str = Depends(get_current_user)) -> MobileGoalListResponse:
     """Active savings goals with progress."""
-    _require_user(x_user_id)
-    goals = await container.goal_repo.find_by_user(x_user_id, status="active")
+    # Authenticated via JWT
+    goals = await container.goal_repo.find_by_user(user_id, status="active")
     now_utc = datetime.now(UTC)
     items: list[MobileGoalItem] = []
 
     for g in goals:
-        target = g.get("target_amount", 1) or 1
-        saved = g.get("current_amount", 0)
+        target = g.target_amount or 1
+        saved = g.current_amount
         pct = int((saved / target) * 100)
-        deadline = g.get("deadline")
+        deadline = g.deadline
 
         monthly_needed: float | None = None
         on_track = False
@@ -201,19 +213,23 @@ async def list_goals(x_user_id: str = Header(...)) -> MobileGoalListResponse:
             )
             remaining = max(0.0, target - saved)
             monthly_needed = round(remaining / months_left)
+            
+            created_at = g.created_at
+            if created_at.tzinfo is None:
+                created_at = created_at.replace(tzinfo=UTC)
+                
             on_track = pct >= int(
                 (
-                    (now_utc - g.get("created_at", now_utc).replace(tzinfo=UTC if g.get("created_at") and g["created_at"].tzinfo is None else None))
-                    .days
-                    / max(1, (deadline - g.get("created_at", now_utc).replace(tzinfo=UTC if g.get("created_at") and g["created_at"].tzinfo is None else None)).days)
+                    (now_utc - created_at).days
+                    / max(1, (deadline - created_at).days)
                 )
                 * 100
             )
 
         items.append(
             MobileGoalItem(
-                id=str(g.get("_id", "")),
-                name=g.get("name", ""),
+                id=str(g.id),
+                name=g.name,
                 target_amount=round(target),
                 saved_amount=round(saved),
                 percent_achieved=min(100, pct),
@@ -228,17 +244,17 @@ async def list_goals(x_user_id: str = Header(...)) -> MobileGoalListResponse:
 
 @router.get("/subscriptions", response_model=MobileSubscriptionListResponse)
 async def list_subscriptions(
-    x_user_id: str = Header(...),
+    user_id: str = Depends(get_current_user),
 ) -> MobileSubscriptionListResponse:
     """Active subscriptions with next charge date and monthly cost summary."""
-    _require_user(x_user_id)
-    subs = await container.subscription_repo.find_by_user(x_user_id)
+    # Authenticated via JWT
+    subs = await container.subscription_repo.find_by_user(user_id)
     now_utc = datetime.now(UTC)
     items: list[MobileSubscriptionItem] = []
     monthly_total = 0.0
 
     for s in subs:
-        ncd = s.get("next_charge_date")
+        ncd = s.next_charge_date
         if ncd is None:
             continue
         if ncd.tzinfo is None:
@@ -246,8 +262,8 @@ async def list_subscriptions(
         due_in = (ncd - now_utc).days
         is_overdue = due_in < 0
 
-        amount = s.get("amount", 0)
-        period = s.get("period", "monthly")
+        amount = s.amount
+        period = s.period
         if period == "weekly":
             monthly_total += amount * 4.33
         elif period == "monthly":
@@ -257,8 +273,8 @@ async def list_subscriptions(
 
         items.append(
             MobileSubscriptionItem(
-                id=str(s.get("_id", "")),
-                name=s.get("name", ""),
+                id=str(s.id),
+                name=s.name,
                 amount=amount,
                 period=period,
                 next_charge_date=ncd,
@@ -273,39 +289,137 @@ async def list_subscriptions(
     )
 
 
+@router.get("/notifications", response_model=MobileNudgeListResponse)
 @router.get("/nudges", response_model=MobileNudgeListResponse)
-async def list_nudges(
-    x_user_id: str = Header(...),
+async def list_notifications(
     limit: int = Query(20, ge=1, le=50),
+    cursor: str | None = Query(None),
+    user_id: str = Depends(get_current_user),
 ) -> MobileNudgeListResponse:
-    """Recent nudges sent by Mai — last 30 days, newest first."""
-    _require_user(x_user_id)
-    nudges = await container.nudge_repo.find_recent(
-        x_user_id, hours=720, limit=limit
-    )
+    """Paged notification history (nudges)."""
+    # Authenticated via JWT
+    nudges = await container.nudge_repo.find_paged(user_id, limit=limit, cursor=cursor)
+
     items: list[MobileNudgeItem] = []
     for n in nudges:
-        sent_at = n.get("sent_at", datetime.now(UTC))
+        sent_at = n.sent_at
         if sent_at.tzinfo is None:
             sent_at = sent_at.replace(tzinfo=UTC)
         items.append(
             MobileNudgeItem(
-                id=str(n.get("_id", "")),
-                type=n.get("nudge_type", ""),
-                body=n.get("message", ""),
+                id=str(n.id),
+                type=n.nudge_type,
+                title=n.title,
+                body=n.message,
                 sent_at=sent_at,
+                was_read=n.was_read,
+                metadata=n.metadata
             )
         )
-    return MobileNudgeListResponse(nudges=items)
+
+    next_cursor = str(nudges[-1].id) if len(nudges) == limit else None
+    return MobileNudgeListResponse(nudges=items, next_cursor=next_cursor)
 
 
-@router.get("/categories/spending", response_model=MobileCategorySpendingResponse)
+@router.get("/notifications/unread-count", response_model=MobileUnreadCountResponse)
+async def get_unread_count(
+    user_id: str = Depends(get_current_user)
+) -> MobileUnreadCountResponse:
+    """Get count of unread notifications."""
+    count = await container.nudge_repo.get_unread_count(user_id)
+    return MobileUnreadCountResponse(unread_count=count)
+
+
+@router.post("/notifications/{id}/read")
+async def mark_notification_read(
+    id: str,
+    user_id: str = Depends(get_current_user)
+):
+    """Mark a specific notification as read."""
+    success = await container.nudge_repo.mark_as_read(id, user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    return {"status": "ok"}
+
+
+@router.get("/export")
+async def export_data(
+    format: Literal["csv", "json"] = Query("csv"),
+    user_id: str = Depends(get_current_user),
+):
+    """Export all transactions as CSV or JSON."""
+    txns = await container.transaction_repo.find_by_user(user_id, limit=5000)
+
+    if format == "json":
+        return [t.model_dump() for t in txns]
+
+    # CSV
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow(["ID", "Date", "Amount", "Currency", "Merchant", "Category", "Direction", "Tags", "Notes"])
+
+    for t in txns:
+        writer.writerow([
+            str(t.id),
+            t.transaction_time.isoformat() if t.transaction_time else "",
+            t.amount,
+            t.currency,
+            t.merchant_name or "",
+            t.category_id or "",
+            t.direction,
+            ",".join(t.tags) if t.tags else "",
+            t.note or ""
+        ])
+
+    output.seek(0)
+    return StreamingResponse(
+        iter([output.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=chiwi_export_{datetime.now().date()}.csv"}
+    )
+
+
+@router.post("/reports")
+async def request_report(
+    period: str = "last_week",
+    user_id: str = Depends(get_current_user)
+):
+    """Trigger a weekly/monthly report on demand."""
+    profile = await get_profile(user_id)
+    result = await container.orchestrator.route("report", {
+        "user_id": user_id,
+        "period": period,
+        "user_timezone": profile.timezone
+    })
+    return result
+
+
+@router.post("/analysis")
+async def request_analysis(
+    user_id: str = Depends(get_current_user)
+):
+    """Trigger a trend analysis on demand."""
+    profile = await get_profile(user_id)
+    result = await container.orchestrator.route("analysis", {
+        "user_id": user_id,
+        "user_timezone": profile.timezone
+    })
+    return result
+
+
+@router.delete("/profile")
+async def delete_account(user_id: str = Depends(get_current_user)):
+    """Delete all user data (GDPR/Data Privacy)."""
+    # This should delete transactions, budgets, goals, etc.
+    # For now, we'll mark as inactive or call a repository method
+    await container.user_repo.delete_user_data(user_id)
+    return {"status": "ok", "message": "Account data deleted"}
 async def category_spending(
-    x_user_id: str = Header(...),
+    user_id: str = Depends(get_current_user),
     period: str = Query("this_month"),
 ) -> MobileCategorySpendingResponse:
     """Category spending breakdown for a period — used for pie/bar charts."""
-    _require_user(x_user_id)
+    # Authenticated via JWT
     icons = _category_icon_map()
 
     start_date, end_date = get_date_range(period)
@@ -313,7 +427,7 @@ async def category_spending(
         raise HTTPException(status_code=400, detail=f"Unsupported period: {period}")
 
     totals = await container.transaction_repo.aggregate_by_category(
-        x_user_id, start_date, end_date
+        user_id, start_date, end_date
     )
 
     total_outflow = sum(r["total"] for r in totals) or 1
@@ -333,3 +447,122 @@ async def category_spending(
         total_outflow=round(total_outflow if total_outflow != 1 else 0),
         breakdown=breakdown,
     )
+
+
+# ---------------------------------------------------------------------------
+# Chat — conversational input from Android (mirrors Telegram chat flow)
+# ---------------------------------------------------------------------------
+
+def _inline_keyboard_to_actions(keyboard: list[list[dict]] | None) -> list[MobileChatAction]:
+    """Translate Telegram-style inline_keyboard to REST-friendly actions.
+
+    Each button ``{text, callback_data}`` is mapped to a ``MobileChatAction``
+    with a structured ``action`` + ``payload`` so the Android app never has
+    to parse Telegram callback_data strings.
+    """
+    if not keyboard:
+        return []
+
+    actions: list[MobileChatAction] = []
+    for row in keyboard:
+        for btn in row:
+            cb = btn.get("callback_data", "")
+            parts = cb.split(":", 1)
+            action_id = parts[0] if parts else ""
+            payload: dict = {}
+            if len(parts) > 1:
+                payload["id"] = parts[1]
+            actions.append(
+                MobileChatAction(label=btn.get("text", ""), action=action_id, payload=payload)
+            )
+    return actions
+
+
+@router.post("/chat", response_model=MobileChatResponse)
+async def mobile_chat(
+    body: MobileChatRequest,
+    user_id: str = Depends(get_current_user),
+) -> MobileChatResponse:
+    """Natural-language chat endpoint for the Android app.
+
+    Accepts free-form text (e.g. "Ăn phở 60k hôm qua", "báo cáo tuần này")
+    and routes it through the same Orchestrator pipeline as Telegram messages.
+    The response is returned as structured JSON instead of a Telegram message.
+
+    Auth: X-User-Id header must be in the configured allow-list.
+    """
+    # Authenticated via JWT
+
+    if not body.message or not body.message.strip():
+        raise HTTPException(status_code=400, detail="Message must not be empty")
+
+    orchestrator = container.orchestrator
+    profile = await get_profile(user_id)
+    user_tz = profile.timezone
+
+    payload = {
+        "source": "android_chat",
+        "message": body.message.strip(),
+        "chat_id": "",          # no Telegram chat — responses go via REST
+        "user_id": user_id,
+    }
+
+    event_type = await orchestrator.classify_event(payload)
+    result = await orchestrator.route(event_type, payload)
+
+    response_text = result.get("response_text", "")
+    if not response_text:
+        response_text = "Đã xử lý xong nhé!"
+
+    return MobileChatResponse(
+        status=result["status"],
+        intent=result.get("intent"),
+        response_text=result["response_text"],
+        transaction_id=result.get("transaction_id"),
+        actions=[MobileChatAction(**a) for a in result.get("inline_keyboard_mobile", [])]
+    )
+
+
+@router.get("/profile/link-code")
+async def get_link_code(user_id: str = Depends(get_current_user)):
+    """Generate a 6-digit code to link this account to Telegram."""
+    import random
+    import string
+    from datetime import UTC, datetime, timedelta
+    
+    code = "".join(random.choices(string.digits, k=6))
+    expires = datetime.now(UTC) + timedelta(minutes=10)
+    
+    await container.user_repo.update_user(user_id, {
+        "link_code": code,
+        "link_code_expires": expires
+    })
+    
+    return {"code": code, "expires_at": expires}
+
+
+@router.get("/profile", response_model=UserProfile)
+async def get_user_profile(user_id: str = Depends(get_current_user)) -> UserProfile:
+    """Return the current user's personalization profile."""
+    return await get_profile(user_id)
+
+
+@router.put("/profile", response_model=UserProfile)
+async def update_user_profile(
+    body: UserProfile,
+    user_id: str = Depends(get_current_user)
+) -> UserProfile:
+    """Update personalization profile fields."""
+    from src.db.models.user import UserProfileDocument
+    
+    # Ensure user_id matches
+    body_dict = body.model_dump()
+    body_dict["user_id"] = user_id
+    
+    profile_doc = UserProfileDocument(**body_dict)
+    await container.user_repo.update_profile(user_id, profile_doc)
+    
+    # Invalidate dashboard cache as tone/language might affect it
+    await container.redis.invalidate_dashboard_cache(user_id)
+    
+    return await get_profile(user_id)

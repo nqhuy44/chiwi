@@ -14,11 +14,16 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_bot_token: str = ""
-    telegram_allowed_user_ids: str = ""
+    allowed_user_ids: str = ""          # env: ALLOWED_USER_IDS (platform-agnostic)
     telegram_webhook_url: str = ""
     telegram_webhook_secret: str = ""
     telegram_message_max_age_seconds: int = 120  # Drop messages older than this
     telegram_rate_limit_per_minute: int = 20  # Max messages per user per minute
+
+    # Auth (JWT) - Preparing for Phase B
+    jwt_secret_key: str = "placeholder_secret_key_change_me"
+    jwt_access_token_expire_minutes: int = 30
+    jwt_refresh_token_expire_days: int = 30
 
     # MongoDB
     mongodb_uri: str = "mongodb://localhost:27017"
@@ -50,12 +55,16 @@ class Settings(BaseSettings):
     nudge_quiet_hour_end: int = 7  # exclusive, local time
 
     @property
-    def allowed_user_ids(self) -> list[str]:
-        if not self.telegram_allowed_user_ids:
-            return []
-        return [uid.strip() for uid in self.telegram_allowed_user_ids.split(",")]
+    def telegram_enabled(self) -> bool:
+        return bool(self.telegram_bot_token)
 
-    model_config = {"env_file": ".env", "env_file_encoding": "utf-8"}
+    @property
+    def allowed_user_id_list(self) -> list[str]:
+        if not self.allowed_user_ids:
+            return []
+        return [uid.strip() for uid in self.allowed_user_ids.split(",")]
+
+    model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 
 
 settings = Settings()

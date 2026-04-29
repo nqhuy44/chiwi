@@ -37,7 +37,7 @@ class AppContainer:
     db: AsyncIOMotorDatabase | None = None
     redis: RedisClient = field(default_factory=RedisClient)
     gemini: GeminiService = field(default_factory=GeminiService)
-    telegram: TelegramService = field(default_factory=TelegramService)
+    telegram: TelegramService | None = None
 
     # Repositories (initialized after DB connect)
     transaction_repo: TransactionRepository | None = None
@@ -60,11 +60,35 @@ class AppContainer:
         # MongoDB
         self.mongo_client = AsyncIOMotorClient(settings.mongodb_uri)
         self.db = self.mongo_client[settings.mongodb_db_name]
-        logger.info(
-            "MongoDB connected: %s/%s",
-            settings.mongodb_uri,
-            settings.mongodb_db_name,
+        # Beanie initialization
+        from beanie import init_beanie
+        from src.db.models.user import UserDocument, UserProfileDocument
+        from src.db.models.transaction import TransactionDocument
+        from src.db.models.budget import BudgetDocument, BudgetEventDocument
+        from src.db.models.category import CategoryDocument
+        from src.db.models.correction import CorrectionDocument
+        from src.db.models.goal import GoalDocument
+        from src.db.models.nudge import NudgeDocument
+        from src.db.models.report import ReportDocument
+        from src.db.models.subscription import SubscriptionDocument
+
+        await init_beanie(
+            database=self.db,
+            document_models=[
+                UserDocument,
+                UserProfileDocument,
+                TransactionDocument,
+                BudgetDocument,
+                BudgetEventDocument,
+                CategoryDocument,
+                CorrectionDocument,
+                GoalDocument,
+                NudgeDocument,
+                ReportDocument,
+                SubscriptionDocument,
+            ],
         )
+        logger.info("Beanie ODM initialized")
 
         # Repositories
         self.transaction_repo = TransactionRepository(self.db)
@@ -81,6 +105,13 @@ class AppContainer:
 
         # Gemini
         self.gemini.initialize()
+
+        # Telegram (optional)
+        if settings.telegram_enabled:
+            self.telegram = TelegramService()
+            logger.info("Telegram enabled")
+        else:
+            logger.info("Telegram disabled (no TELEGRAM_BOT_TOKEN)")
 
         # Dashboard service
         self.dashboard_service = DashboardService(

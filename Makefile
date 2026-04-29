@@ -6,7 +6,7 @@ UVICORN := $(VENV)/bin/uvicorn
 REPORTS_DIR := reports
 
 .PHONY: setup venv install run ngrok webhook-set webhook-delete lint test test-integration test-all test-cov test-report clean-reports \
-        docker-build docker-up docker-down docker-logs
+        docker-build docker-up docker-down docker-logs backup
 
 venv:
 	@test -d $(VENV) || python3 -m venv $(VENV)
@@ -20,7 +20,16 @@ setup: install
 	@echo "Setup complete. Edit .env with your keys."
 
 run: venv
-	$(UVICORN) src.main:app --reload
+	$(UVICORN) src.main:app --host 0.0.0.0 --reload
+
+migrate: venv
+	PYTHONPATH=. $(PYTHON) scripts/migrate_to_beanie.py
+
+seed-profiles: venv
+	PYTHONPATH=. $(PYTHON) scripts/seed_profiles.py
+
+backup:
+	bash scripts/backup_db.sh
 
 ngrok:
 	ngrok http 8000

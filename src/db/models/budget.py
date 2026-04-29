@@ -1,10 +1,10 @@
 from datetime import UTC, datetime
 from typing import Literal
+from beanie import Document
+from pydantic import Field
 
-from pydantic import BaseModel, Field
 
-
-class BudgetDocument(BaseModel):
+class BudgetDocument(Document):
     """Mutable budget config. Every change to this document also creates
     a BudgetEventDocument for the audit trail."""
 
@@ -27,14 +27,12 @@ class BudgetDocument(BaseModel):
     temp_limit_expires_at: datetime | None = None
     temp_limit_reason: str | None = None
 
+    class Settings:
+        name = "budgets"
 
-class BudgetEventDocument(BaseModel):
-    """Immutable audit log of every user action on a budget.
 
-    Never updated — only inserted. Used by the Behavioral and Analytics
-    agents to detect patterns: repeated silencing, frequent temp overrides,
-    limit creep after payday, etc.
-    """
+class BudgetEventDocument(Document):
+    """Immutable audit log of every user action on a budget."""
 
     user_id: str
     budget_id: str                          # references BudgetDocument._id
@@ -53,3 +51,6 @@ class BudgetEventDocument(BaseModel):
     reason: str | None = None                       # user-provided context if any
     triggered_by: Literal["user", "system"] = "user"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    class Settings:
+        name = "budget_events"

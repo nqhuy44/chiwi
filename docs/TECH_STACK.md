@@ -6,13 +6,15 @@
 |---|---|---|---|
 | **Language** | Python | 3.12+ | Rich AI/ML ecosystem, native async support, Pydantic integration |
 | **Web Framework** | FastAPI | 0.115+ | High performance async API, automatic OpenAPI docs, Pydantic-native validation |
-| **Agent Orchestration** | LangGraph | 0.4+ | Stateful multi-agent workflows with conditional routing, built-in checkpointing |
+| **Agent Orchestration** | Plain async dispatch | — | Think-First pattern via `Orchestrator.route()` — no LangGraph dependency needed |
 | **LLM Provider** | Google Gemini | 2.5 Flash / 2.5 Pro | Massive context window, native JSON mode, strong Vietnamese language support, cost-effective |
-| **Database** | MongoDB | 8.x | Schema-less design for unpredictable AI metadata, high write throughput |
-| **Cache / State** | Redis | 8.x | Sub-millisecond latency for session management, conversation memory, rate limiting |
+| **Database** | MongoDB + Beanie | 8.x / 1.28+ | ODM for type-safe document modeling and Pydantic-based validation |
+| **Cache / State** | Redis | 8.x | Sub-millisecond latency for session management, merchant cache, rate limiting, dashboard cache |
 | **Interface** | Telegram Bot API | Latest | Zero UI development effort, cross-platform, built-in notification system |
-| **Dashboard** | Telegram Mini App | - | Rich visual charts within Telegram, no separate app deployment |
-| **Containerization** | Docker + Compose | 27+ / 2.x | Reproducible builds, single-command deployment, self-hosted friendly |
+| **Dashboard** | Android App (separate repo) | — | Native mobile dashboard consuming `/api/mobile/*` REST endpoints |
+| **Cron Scheduling** | supercronic | 0.2.33 | Container-native cron daemon — runs in foreground, handles signals, supports `CRON_TZ` |
+| **Containerization** | Docker + Compose | 27+ / 2.x | Reproducible builds, single-command deployment, self-hosted on VM |
+| **CI/CD** | GitHub Actions | — | Build → push Docker Hub → SSH deploy to VM on every push to `main` |
 
 ## AI / LLM Strategy
 
@@ -41,13 +43,14 @@ With ~50 transactions/day:
 |---|---|
 | `fastapi` | Web framework & API endpoints |
 | `uvicorn` | ASGI server |
-| `pydantic` | Data validation & schema definitions |
-| `langgraph` | Multi-agent orchestration |
-| `langchain-google-genai` | Gemini LLM integration |
-| `motor` | Async MongoDB driver |
+| `pydantic` | Data validation & schema definitions (v2.x) |
+| `beanie` | Async ODM for MongoDB (Pydantic-based) |
+| `google-genai` | Gemini LLM integration (v1.x SDK) |
 | `redis[hiredis]` | Async Redis client with C-extension performance |
 | `python-telegram-bot` | Telegram Bot API wrapper |
 | `httpx` | Async HTTP client for webhook/external calls |
+| `pyjwt` | JWT token management for mobile auth |
+| `passlib[bcrypt]` | Secure password hashing |
 
 ### Development
 
@@ -57,6 +60,7 @@ With ~50 transactions/day:
 | `isort` | Import sorter |
 | `pytest` | Testing framework |
 | `pytest-asyncio` | Async test support |
+| `mongomock_motor` | Mock MongoDB driver for Beanie unit tests |
 | `mypy` | Static type checking |
 
 ## Infrastructure
@@ -64,13 +68,22 @@ With ~50 transactions/day:
 ### Docker Services
 
 ```yaml
-# docker-compose.yaml (conceptual)
+# docker-compose.yaml
 services:
-  chiwi-api:       # FastAPI app (port 8000)
-  chiwi-mongo:     # MongoDB (port 27017)
-  chiwi-redis:     # Redis (port 6379)
-  chiwi-worker:    # Scheduled tasks (cron-based)
+  api:                  # FastAPI + Uvicorn (port 8000)
+  worker-behavioral:    # supercronic — behavioral nudges, daily 08:00 ICT
+  worker-budget:        # supercronic — budget temp-override cleanup, hourly
+  worker-reports:       # supercronic — weekly summary report, Monday 09:00 ICT
 ```
+
+All four share the same Docker image (`docker.io/nqh44/chiwi:<sha>`). Workers are differentiated only by their `command: supercronic /app/cron/worker-<name>.cron` override. MongoDB and Redis run as separate containers on the same host.
+
+### Deployment Pipeline
+
+1. Push to `main` → GitHub Actions `build-push` job builds and pushes image to Docker Hub tagged `:<sha7>` + `:latest`.
+2. `deploy` job SSHes into the VM, pins `docker-compose.yaml` to the exact SHA image, runs `docker compose up -d`, and prunes old images.
+3. Verifies all 4 containers reach `running` state within 60 s.
+4. Smoke-tests `https://<VM_DOMAIN>/health` from the GitHub runner.
 
 ### Environment Variables
 

@@ -22,7 +22,7 @@ from zoneinfo import ZoneInfo
 
 from src.core.config import settings
 from src.core.dependencies import container
-from src.core.profiles import configured_user_ids, get_profile
+from src.core.profiles import get_profile
 from src.core.spending_avg import SCOPE_TOTAL, compute_avg, compute_avg_all_categories
 from src.core.utils import get_budget_window, get_date_range
 from src.db.repositories.budget_repo import effective_limit
@@ -48,15 +48,15 @@ async def _subscription_triggers(user_id: str) -> list[dict]:
     triggers: list[dict] = []
     upcoming = await sub_repo.find_upcoming(user_id, within_hours=48)
     for sub in upcoming:
-        next_date = sub.get("next_charge_date")
+        next_date = sub.next_charge_date
         triggers.append(
             {
                 "nudge_type": "subscription_reminder",
                 "trigger_data": {
-                    "subscription_name": sub.get("name"),
-                    "merchant_name": sub.get("merchant_name"),
-                    "amount": sub.get("amount"),
-                    "period": sub.get("period"),
+                    "subscription_name": sub.name,
+                    "merchant_name": sub.merchant_name,
+                    "amount": sub.amount,
+                    "period": sub.period,
                     "next_charge_date": next_date.strftime("%d/%m/%Y")
                     if next_date
                     else None,
@@ -74,7 +74,7 @@ async def _budget_triggers(user_id: str) -> list[dict]:
     if not budget_repo or not txn_repo:
         return []
 
-    profile = get_profile(user_id)
+    profile = await get_profile(user_id)
     now_utc = datetime.now(UTC).replace(tzinfo=None)
 
     budgets = await budget_repo.find_by_user(user_id)
@@ -82,15 +82,15 @@ async def _budget_triggers(user_id: str) -> list[dict]:
 
     for budget in budgets:
         # Silenced budgets are tracked but never fire nudges
-        if budget.get("is_silenced"):
+        if budget.is_silenced:
             continue
 
-        period = budget.get("period", "monthly")
+        period = budget.period or "monthly"
         start_date, _ = get_budget_window(period, timezone=profile.timezone)
         if not start_date:
             continue
 
-        category_id = budget.get("category_id", "")
+        category_id = budget.category_id or ""
         limit = effective_limit(budget, now_utc)
         if limit <= 0:
             continue
@@ -99,14 +99,14 @@ async def _budget_triggers(user_id: str) -> list[dict]:
             user_id=user_id, start_date=start_date, end_date=now_utc, limit=200
         )
         spent = sum(
-            t.get("amount", 0)
+            t.amount
             for t in txns
-            if t.get("direction") == "outflow"
-            and (t.get("category_id") or "").lower() == category_id.lower()
+            if t.direction == "outflow"
+            and (t.category_id or "").lower() == category_id.lower()
         )
 
         usage_pct = (spent / limit) * 100
-        is_temp = budget.get("temp_limit") is not None
+        is_temp = budget.temp_limit is not None
 
         if usage_pct >= 100:
             triggers.append(
@@ -146,7 +146,7 @@ async def _spending_alert_trigger(user_id: str) -> dict | None:
     if not txn_repo:
         return None
 
-    profile = get_profile(user_id)
+    profile = await get_profile(user_id)
     _, cat_results = await compute_avg_all_categories(
         txn_repo, user_id, period="weekly", timezone=profile.timezone
     )
@@ -185,7 +185,7 @@ async def _impulse_detection_trigger(user_id: str) -> dict | None:
     txns = await txn_repo.find_by_user(
         user_id=user_id, start_date=since, end_date=now_utc, limit=50
     )
-    outflows = [t for t in txns if t.get("direction") == "outflow"]
+    outflows = [t for t in txns if t.direction == "outflow"]
 
     if len(outflows) < 3:
         return None
@@ -194,7 +194,7 @@ async def _impulse_detection_trigger(user_id: str) -> dict | None:
         "nudge_type": "impulse_detection",
         "trigger_data": {
             "count": len(outflows),
-            "total_amount": round(sum(t.get("amount", 0) for t in outflows)),
+            "total_amount": round(sum(t.amount for t in outflows)),
             "reason": "multiple_purchases_24h",
         },
     }
@@ -206,12 +206,11 @@ async def _saving_streak_trigger(user_id: str) -> dict | None:
     if not txn_repo:
         return None
 
-    profile = get_profile(user_id)
+    profile = await get_profile(user_id)
     tz = ZoneInfo(profile.timezone)
     today_local = datetime.now(tz).date()
 
     # Need per-day totals — compute individually for streak detection
-    # Use compute_avg for baseline; check each past day against it
     baseline = await compute_avg(
         txn_repo, user_id, period="daily",
         scope=SCOPE_TOTAL, timezone=profile.timezone,
@@ -228,16 +227,15 @@ async def _saving_streak_trigger(user_id: str) -> dict | None:
 
     by_day: dict[date, float] = defaultdict(float)
     for t in txns:
-        if t.get("direction") == "outflow":
-            raw_ts = t.get("transaction_time")
+        if t.direction == "outflow":
+            raw_ts = t.transaction_time
             if raw_ts:
                 local_dt = raw_ts.astimezone(tz) if raw_ts.tzinfo else raw_ts
-                by_day[local_dt.date()] += t.get("amount", 0)
+                by_day[local_dt.date()] += t.amount
 
     streak = 0
     for i in range(1, 8):
         check_day = today_local - timedelta(days=i)
-        # A day with no transactions counts as 0 spend — below any positive average
         day_total = by_day.get(check_day, 0)
         if day_total < baseline.average:
             streak += 1
@@ -268,8 +266,8 @@ async def _goal_progress_triggers(user_id: str) -> list[dict]:
     triggers: list[dict] = []
 
     for goal in goals:
-        target = goal.get("target_amount", 0)
-        current = goal.get("current_amount", 0)
+        target = goal.target_amount
+        current = goal.current_amount
         if target <= 0 or current <= 0:
             continue
 
@@ -281,7 +279,7 @@ async def _goal_progress_triggers(user_id: str) -> list[dict]:
                     {
                         "nudge_type": "goal_progress",
                         "trigger_data": {
-                            "goal_name": goal.get("name", ""),
+                            "goal_name": goal.name,
                             "target_amount": round(target),
                             "current_amount": round(current),
                             "progress_pct": round(progress_pct, 1),
@@ -342,7 +340,7 @@ async def _refresh_dashboard_caches() -> None:
     dashboard_service = container.dashboard_service
     if not dashboard_service:
         return
-    for user_id in configured_user_ids():
+    for user_id in await container.user_repo.list_active_user_ids():
         try:
             await dashboard_service.invalidate(user_id)
             await dashboard_service.get_or_compute(user_id)
@@ -353,20 +351,15 @@ async def _refresh_dashboard_caches() -> None:
 
 async def run_behavioral_analysis() -> None:
     """Fan-out: invoke the Behavioral Agent for every profiled user."""
-    user_ids = configured_user_ids()
+    user_ids = await container.user_repo.list_active_user_ids()
     if not user_ids:
         logger.info("No user profiles configured — skipping behavioral run")
         return
 
     orchestrator = container.orchestrator
     for user_id in user_ids:
-        profile = get_profile(user_id)
-        if not profile.chat_id:
-            logger.warning(
-                "Profile %s has no chat_id — cannot deliver nudges, skipping",
-                user_id,
-            )
-            continue
+        profile = await get_profile(user_id)
+        # We no longer skip if chat_id is missing, as nudges can be delivered via mobile app
         if profile.nudge_frequency == "off":
             continue
 
@@ -374,7 +367,7 @@ async def run_behavioral_analysis() -> None:
         for trigger in triggers:
             payload = {
                 "user_id": user_id,
-                "chat_id": profile.chat_id,
+                "chat_id": profile.chat_id,  # May be None, BehavioralAgent handles it
                 "nudge_type": trigger["nudge_type"],
                 "trigger_data": trigger.get("trigger_data") or {},
             }
@@ -393,20 +386,17 @@ async def run_behavioral_analysis() -> None:
 async def run_weekly_reports() -> None:
     """Weekly report generation for all profiled users.
 
-    Generates a last_week summary for each user and delivers it via Telegram.
+    Generates a last_week summary for each user and delivers it via Telegram (if enabled).
     Intended to be triggered by Cloud Scheduler every Monday 09:00.
     """
-    user_ids = configured_user_ids()
+    user_ids = await container.user_repo.list_active_user_ids()
     if not user_ids:
         logger.info("No user profiles configured — skipping weekly reports")
         return
 
     orchestrator = container.orchestrator
     for user_id in user_ids:
-        profile = get_profile(user_id)
-        if not profile.chat_id:
-            logger.warning("Profile %s has no chat_id — cannot deliver report", user_id)
-            continue
+        profile = await get_profile(user_id)
         try:
             result = await orchestrator.route("report", {
                 "user_id": user_id,
@@ -415,7 +405,11 @@ async def run_weekly_reports() -> None:
             })
             report_text = result.get("response_text", "")
             if report_text and result.get("status") != "error":
-                await container.telegram.send_message(profile.chat_id, report_text)
+                if container.telegram and profile.chat_id:
+                    await container.telegram.send_message(profile.chat_id, report_text)
+                else:
+                    logger.info("Weekly report generated but Telegram delivery skipped (disabled or no chat_id)")
+            
             logger.info(
                 "Weekly report user=%s status=%s", user_id, result.get("status")
             )
@@ -434,7 +428,7 @@ async def run_budget_checks() -> None:
         logger.warning("budget_repo not available — skipping budget checks")
         return
 
-    user_ids = configured_user_ids()
+    user_ids = await container.user_repo.list_active_user_ids()
     now_utc = datetime.now(UTC).replace(tzinfo=None)
     cleared = 0
 
@@ -442,18 +436,18 @@ async def run_budget_checks() -> None:
         try:
             budgets = await budget_repo.find_by_user(user_id)
             for budget in budgets:
-                temp_expires = budget.get("temp_limit_expires_at")
-                if budget.get("temp_limit") is None or not temp_expires:
+                temp_expires = budget.temp_limit_expires_at
+                if budget.temp_limit is None or not temp_expires:
                     continue
                 exp = temp_expires.replace(tzinfo=None) if temp_expires.tzinfo else temp_expires
                 if now_utc > exp:
-                    await budget_repo.clear_temp_override(str(budget["_id"]), user_id)
+                    await budget_repo.clear_temp_override(str(budget.id), user_id)
                     cleared += 1
                     logger.info(
                         "Cleared expired temp override: budget=%s user=%s category=%s",
-                        budget["_id"],
+                        budget.id,
                         user_id,
-                        budget.get("category_id"),
+                        budget.category_id,
                     )
         except Exception:
             logger.exception("Budget check failed for user_id=%s", user_id)

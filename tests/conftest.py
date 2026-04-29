@@ -1,13 +1,53 @@
-"""Shared pytest fixtures for ChiWi tests."""
-
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
+
+# Patch category_names globally for tests to avoid early Beanie initialization during imports
+patch("src.core.categories.category_names", return_value=["Khác", "Ăn uống", "Di chuyển"]).start()
+patch("src.core.categories.load_categories", return_value=[]).start()
 
 import pytest
 from dotenv import load_dotenv
+from motor.motor_asyncio import AsyncIOMotorClient
+from beanie import init_beanie
+
+from src.db.models.user import UserDocument, UserProfileDocument
+from src.db.models.transaction import TransactionDocument
+from src.db.models.budget import BudgetDocument, BudgetEventDocument
+from src.db.models.goal import GoalDocument
+from src.db.models.nudge import NudgeDocument
+from src.db.models.subscription import SubscriptionDocument
+from src.db.models.category import CategoryDocument
+from src.db.models.correction import CorrectionDocument
 
 # Load .env BEFORE any test module evaluates pytestmark skipif conditions
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
+
+from mongomock_motor import AsyncMongoMockClient
+
+@pytest.fixture(autouse=True)
+async def init_test_db():
+    """Initialize Beanie with a mock-like database for tests."""
+    client = AsyncMongoMockClient()
+    db = client.test_db
+    
+    # Patch to fix compatibility between Beanie and mongomock_motor
+    orig_list_collection_names = db.list_collection_names
+    async def mocked_list_collection_names(*args, **kwargs):
+        kwargs.pop("authorizedCollections", None)
+        kwargs.pop("nameOnly", None)
+        return await orig_list_collection_names(*args, **kwargs)
+    db.list_collection_names = mocked_list_collection_names
+
+    await init_beanie(
+        database=db,
+        document_models=[
+            UserDocument, UserProfileDocument, TransactionDocument,
+            BudgetDocument, BudgetEventDocument, GoalDocument,
+            NudgeDocument, SubscriptionDocument, CategoryDocument,
+            CorrectionDocument
+        ]
+    )
 
 
 @pytest.fixture
@@ -30,6 +70,7 @@ def mock_redis():
     client.set_session = AsyncMock(return_value=None)
     client.set_last_transaction = AsyncMock(return_value=None)
     client.get_last_transaction = AsyncMock(return_value=None)
+    client.invalidate_dashboard_cache = AsyncMock(return_value=None)
     return client
 
 
@@ -115,4 +156,13 @@ def mock_subscription_repo():
     repo.find_by_merchant = AsyncMock(return_value=[])
     repo.find_upcoming = AsyncMock(return_value=[])
     repo.deactivate = AsyncMock(return_value=True)
+    return repo
+
+@pytest.fixture
+def mock_user_repo():
+    """Mock UserRepository."""
+    from unittest.mock import AsyncMock, MagicMock
+    repo = MagicMock()
+    repo.find_by_id = AsyncMock(return_value=None)
+    repo.get_profile = AsyncMock(return_value=MagicMock())
     return repo

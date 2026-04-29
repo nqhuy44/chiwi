@@ -43,4 +43,15 @@ class IngestionAgent:
             logger.warning("Gemini returned empty result for ingestion")
             return ParsedTransaction(is_transaction=False, raw_text=raw_text)
 
-        return ParsedTransaction(raw_text=raw_text, **result)
+        try:
+            return ParsedTransaction(raw_text=raw_text, **result)
+        except Exception:
+            # If it failed (likely validation), try stripping transaction_time first
+            if "transaction_time" in result:
+                result.pop("transaction_time")
+                try:
+                    return ParsedTransaction(raw_text=raw_text, **result)
+                except Exception:
+                    pass
+            logger.error("Failed to parse transaction from Gemini result: %s", result)
+            return ParsedTransaction(is_transaction=False, raw_text=raw_text)

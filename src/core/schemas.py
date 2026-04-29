@@ -64,11 +64,7 @@ class EnrichedTransaction(BaseModel):
 
 
 class UserProfile(BaseModel):
-    """Personalization profile loaded from `config/user_profiles.json`.
-
-    Drives the Behavioral Agent's nudge tone and analogies. Stored outside
-    the codebase so the user can tweak occupation/hobbies without redeploying.
-    """
+    """Personalization profile stored in MongoDB."""
 
     occupation: str = ""
     hobbies: list[str] = Field(default_factory=list)
@@ -258,15 +254,67 @@ class MobileSubscriptionListResponse(BaseModel):
 class MobileNudgeItem(BaseModel):
     id: str
     type: str
+    title: str
     body: str
     sent_at: datetime
+    was_read: bool
+    metadata: dict = Field(default_factory=dict)
 
 
 class MobileNudgeListResponse(BaseModel):
     nudges: list[MobileNudgeItem]
+    next_cursor: str | None = None
+
+
+class MobileUnreadCountResponse(BaseModel):
+    unread_count: int
+
+
+class MobileChatRequest(BaseModel):
+    """Natural-language message sent from the Android app.
+
+    Same zero-effort concept as Telegram: user types free-form text
+    (e.g. "Ăn phở 60k hôm qua") and the backend handles all parsing.
+    """
+    message: str
+
+
+class MobileChatAction(BaseModel):
+    """A single actionable button surfaced to the Android UI."""
+    label: str
+    action: str          # machine-readable action id, e.g. "correct", "delete", "confirm"
+    payload: dict = Field(default_factory=dict)
+
+
+class MobileChatResponse(BaseModel):
+    status: str
+    intent: str | None = None
+    response_text: str
+    transaction_id: str | None = None
+    actions: list[MobileChatAction] = Field(default_factory=list)
 
 
 class MobileCategorySpendingResponse(BaseModel):
     period: str
     total_outflow: float
     breakdown: list[MobileCategoryItem]
+
+# --- Auth ---
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    full_name: str | None = None
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class TokenResponse(BaseModel):
+    access_token: str
+    refresh_token: str
+    token_type: str = "bearer"
+    user_id: str

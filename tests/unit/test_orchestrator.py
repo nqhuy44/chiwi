@@ -5,6 +5,8 @@ import pytest
 from src.core.orchestrator import Orchestrator
 
 
+from unittest.mock import MagicMock, patch
+
 @pytest.fixture
 def orchestrator(
     mock_gemini,
@@ -18,18 +20,25 @@ def orchestrator(
     mock_nudge_repo,
     mock_subscription_repo,
 ):
-    return Orchestrator(
-        gemini=mock_gemini,
-        redis=mock_redis,
-        telegram=mock_telegram,
-        transaction_repo=mock_transaction_repo,
-        budget_repo=mock_budget_repo,
-        budget_event_repo=mock_budget_event_repo,
-        goal_repo=mock_goal_repo,
-        correction_repo=mock_correction_repo,
-        nudge_repo=mock_nudge_repo,
-        subscription_repo=mock_subscription_repo,
-    )
+    with patch("src.core.orchestrator.get_profile") as mock_get_profile:
+        # Return a mock profile with a default timezone
+        mock_profile = MagicMock()
+        mock_profile.timezone = "Asia/Ho_Chi_Minh"
+        mock_profile.chat_id = "12345678"
+        mock_get_profile.return_value = mock_profile
+        
+        yield Orchestrator(
+            gemini=mock_gemini,
+            redis=mock_redis,
+            telegram=mock_telegram,
+            transaction_repo=mock_transaction_repo,
+            budget_repo=mock_budget_repo,
+            budget_event_repo=mock_budget_event_repo,
+            goal_repo=mock_goal_repo,
+            correction_repo=mock_correction_repo,
+            nudge_repo=mock_nudge_repo,
+            subscription_repo=mock_subscription_repo,
+        )
 
 
 @pytest.mark.asyncio

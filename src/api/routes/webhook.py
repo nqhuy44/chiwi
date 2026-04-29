@@ -87,10 +87,10 @@ async def _spending_summary(user_id: str) -> dict:
     total_out = 0.0
     by_cat: dict[str, float] = defaultdict(float)
     for t in txns:
-        if t.get("direction") == "outflow":
-            amt = t.get("amount", 0)
+        if t.direction == "outflow":
+            amt = t.amount
             total_out += amt
-            by_cat[t.get("category_id") or "Khác"] += amt
+            by_cat[t.category_id or "Khác"] += amt
 
     top = sorted(by_cat.items(), key=lambda x: x[1], reverse=True)[:3]
     return {
@@ -182,10 +182,10 @@ async def _handle_callback_query(callback_query: dict) -> None:
             await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
             return
         txn = await container.transaction_repo.find_by_id(txn_id)
-        if not txn or txn.get("user_id") != from_id:
+        if not txn or txn.user_id != from_id:
             await telegram.answer_callback_query(cq_id, text="Không tìm thấy giao dịch.")
             return
-        if txn.get("locked"):
+        if txn.locked:
             await telegram.answer_callback_query(cq_id, text="🔒 Đã xác nhận rồi.")
             return
         await container.transaction_repo.lock(txn_id, from_id)
@@ -202,10 +202,10 @@ async def _handle_callback_query(callback_query: dict) -> None:
             await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
             return
         txn = await container.transaction_repo.find_by_id(txn_id)
-        if not txn or txn.get("user_id") != from_id:
+        if not txn or txn.user_id != from_id:
             await telegram.answer_callback_query(cq_id, text="Không tìm thấy giao dịch.")
             return
-        if txn.get("locked"):
+        if txn.locked:
             await telegram.answer_callback_query(cq_id, text="🔒 Giao dịch đã xác nhận, không thể xoá.")
             return
         await telegram.answer_callback_query(cq_id)
@@ -263,7 +263,7 @@ async def _handle_callback_query(callback_query: dict) -> None:
 
 
 async def _handle_command(
-    command: str, args: list[str], chat_id: str, from_id: str
+    command: str, args: list[str], chat_id: str, real_user_id: str | None
 ) -> None:
     """Dispatch a bot command. Sends reply directly via TelegramService."""
     telegram = container.telegram
@@ -276,16 +276,38 @@ async def _handle_command(
         await telegram.send_message(chat_id, _HELP_TEXT)
         return
 
+    if command == "/link":
+        if not args:
+            await telegram.send_message(chat_id, "Vui lòng nhập mã liên kết. Ví dụ: /link 123456\nBạn có thể lấy mã này trong phần Cài đặt trên ứng dụng Android.")
+            return
+        
+        code = args[0]
+        user = await container.user_repo.find_by_link_code(code)
+        if not user:
+            await telegram.send_message(chat_id, "Mã liên kết không hợp lệ hoặc đã hết hạn. Vui lòng lấy mã mới trên ứng dụng Android.")
+            return
+        
+        user_id = user.user_id
+        # Update user with chat_id
+        await container.user_repo.update_user(user_id, {
+            "telegram_chat_id": str(chat_id),
+            "link_code": None,
+            "link_code_expires": None
+        })
+        
+        await telegram.send_message(chat_id, f"✅ Chúc mừng! Tài khoản Telegram đã được liên kết với người dùng <b>{user_id}</b>. Bây giờ bạn có thể nhắn tin cho Mai tại đây.")
+        return
+
     if command == "/nudge":
         nudge_type = (
             _NUDGE_TYPES.get(args[0], _DEFAULT_NUDGE_TYPE)
             if args
             else _DEFAULT_NUDGE_TYPE
         )
-        trigger_data = await _spending_summary(from_id)
+        trigger_data = await _spending_summary(real_user_id)
         trigger_data["source"] = "telegram"
         payload = {
-            "user_id": from_id,
+            "user_id": real_user_id,
             "chat_id": chat_id,
             "nudge_type": nudge_type,
             "trigger_data": trigger_data,
@@ -325,7 +347,7 @@ async def receive_notification(
 
     Auth: X-User-Id header must be in the configured allow-list.
     """
-    if x_user_id not in settings.allowed_user_ids:
+    if x_user_id not in settings.allowed_user_id_list:
         raise HTTPException(status_code=401, detail="Unauthorized user")
 
     orchestrator = container.orchestrator
@@ -348,7 +370,7 @@ async def receive_notification(
     )
 
 
-async def _handle_message(message: dict, update_id: int | None) -> None:
+async def _handle_message_with_id(message: dict, update_id: int | None, real_user_id: str | None) -> None:
     """Process a Telegram text/voice message. Runs as a background task so
     the webhook handler can return HTTP 200 to Telegram immediately."""
     orchestrator = container.orchestrator
@@ -364,7 +386,7 @@ async def _handle_message(message: dict, update_id: int | None) -> None:
         parts = text.split()
         command = parts[0].split("@")[0].lower()  # strip @botname suffix
         args = parts[1:]
-        await _handle_command(command, args, chat_id, from_id)
+        await _handle_command(command, args, chat_id, real_user_id)
         return
 
     # --- Voice message ---
@@ -387,7 +409,7 @@ async def _handle_message(message: dict, update_id: int | None) -> None:
             "audio_bytes": audio_bytes,
             "audio_mime_type": mime_type,
             "chat_id": chat_id,
-            "user_id": from_id,
+            "user_id": real_user_id,
         }
         result = await orchestrator.route("voice", payload)
         response_text = result.get("response_text")
@@ -404,7 +426,7 @@ async def _handle_message(message: dict, update_id: int | None) -> None:
         "source": "telegram",
         "message": text,
         "chat_id": chat_id,
-        "user_id": from_id,
+        "user_id": real_user_id,
     }
 
     event_type = await orchestrator.classify_event(payload)
@@ -477,14 +499,26 @@ async def telegram_webhook(
     if not chat_id or (not text and not voice):
         return {"ok": True}
 
-    if (
-        chat_id not in settings.allowed_user_ids
-        and from_id not in settings.allowed_user_ids
-    ):
-        logger.warning(
-            "Unauthorized telegram user: chat_id=%s from_id=%s", chat_id, from_id
-        )
-        return {"ok": True}
+    # --- Authorization Check ---
+    # 1. First, check if this chat_id is already linked to a user in DB
+    user = await container.user_repo.find_by_chat_id(chat_id)
+    real_user_id = user.user_id if user else None
+    
+    # 2. If not linked, check if it's a command (like /start, /help, /link)
+    # Commands are allowed for anyone to facilitate onboarding/linking
+    is_command = text and text.startswith("/")
+    
+    if not real_user_id and not is_command:
+        # Fallback for migrated users: check if chat_id exists as a user_id
+        legacy_user = await container.user_repo.find_by_id(chat_id)
+        if legacy_user:
+            real_user_id = chat_id
+            # Auto-link for future lookups
+            await container.user_repo.update_user(chat_id, {"telegram_chat_id": chat_id})
+        else:
+            logger.warning("Unauthorized telegram user: chat_id=%s", chat_id)
+            await container.telegram.send_message(chat_id, "Chào bạn! Hiện tại mình chỉ hỗ trợ người dùng đã đăng ký. Vui lòng tải ứng dụng Android và liên kết tài khoản nhé!")
+            return {"ok": True}
 
     redis_client = container.redis
 
@@ -509,6 +543,7 @@ async def telegram_webhook(
             )
             return {"ok": True}
 
-    # All guards passed — hand off to background task and return immediately
-    background_tasks.add_task(_handle_message, message, update_id)
+    # All guards passed — hand off to background task
+    # We need to pass the real_user_id we found
+    background_tasks.add_task(_handle_message_with_id, message, update_id, real_user_id)
     return {"ok": True}

@@ -1,10 +1,10 @@
 from datetime import UTC, datetime
 from typing import Literal
+from beanie import Document
+from pydantic import Field
 
-from pydantic import BaseModel, Field
 
-
-class SubscriptionDocument(BaseModel):
+class SubscriptionDocument(Document):
     user_id: str
     name: str                    # display name, e.g. "Netflix"
     merchant_name: str           # normalised for transaction matching
@@ -21,3 +21,6 @@ class SubscriptionDocument(BaseModel):
     cancelled_at: datetime | None = None
     cancellation_reason: Literal["manual", "replaced"] | None = None
     replaces_id: str | None = None   # _id of the subscription this supersedes
+
+    class Settings:
+        name = "subscriptions"

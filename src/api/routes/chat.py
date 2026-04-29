@@ -28,7 +28,7 @@ async def get_report(
     The report is generated on-demand via the Reporting Agent and returned
     as structured JSON (same text that would be sent via Telegram).
     """
-    if not user_id or user_id not in settings.allowed_user_ids:
+    if user_id not in settings.allowed_user_id_list:
         raise HTTPException(status_code=401, detail="Unauthorized user")
 
     if report_type not in _VALID_REPORT_TYPES:
