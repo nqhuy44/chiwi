@@ -1229,7 +1229,8 @@ class Orchestrator:
                 ),
             }
 
-        local_tz = ZoneInfo(settings.business_timezone)
+        from src.core.config import settings as _settings
+        local_tz = ZoneInfo(_settings.business_timezone)
         now_local = datetime.now(UTC).astimezone(local_tz)
         period_label = {"monthly": "tháng", "weekly": "tuần", "yearly": "năm"}
         period_str = period_label.get(sub.period, "tháng")
