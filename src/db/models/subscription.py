@@ -12,6 +12,7 @@ class SubscriptionDocument(Document):
     currency: str = "VND"
     period: Literal["weekly", "monthly", "yearly"] = "monthly"
     next_charge_date: datetime
+    anchor_day: int | None = None  # preferred day-of-month; e.g. 31 = "last day of month"
     last_charged_at: datetime | None = None
     is_active: bool = True
     source: Literal["manual", "auto_detected"] = "manual"

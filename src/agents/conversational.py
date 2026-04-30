@@ -41,6 +41,7 @@ class IntentResult(BaseModel):
         "set_goal",
         "set_subscription",
         "list_subscriptions",
+        "query_subscription",
         "mark_subscription_paid",
         "cancel_subscription",
         "update_subscription",

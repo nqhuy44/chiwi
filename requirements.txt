@@ -13,6 +13,7 @@ pyjwt>=2.10.1
 passlib>=1.7.4
 bcrypt==4.0.1
 beanie<2.0.0
+python-dateutil>=2.9.0
 
 # Development
 black>=26.3.1

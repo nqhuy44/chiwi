@@ -48,9 +48,12 @@ FastAPI app (`src/main.py`) + a separate cron worker process (`src/worker.py`, s
   - `ask_category` → `_handle_ask_category` lists top-level categories
   - `set_budget` → `_handle_set_budget` inserts a `BudgetDocument` for the cycle
   - `set_goal` → `_handle_set_goal` inserts a `GoalDocument`
-  - `set_subscription` → `_handle_set_subscription` inserts a `SubscriptionDocument`
+  - `set_subscription` → `_handle_set_subscription` inserts a `SubscriptionDocument` (sets `anchor_day` from the parsed charge date)
   - `list_subscriptions` → `_handle_list_subscriptions` returns active subscriptions
+  - `query_subscription` → `_handle_query_subscription` returns single-subscription payment status (last charged, next charge, paid-this-period flag computed in VN timezone)
   - `mark_subscription_paid` → `_handle_mark_subscription_paid` advances next_charge_date
+  - `cancel_subscription` → `_handle_cancel_subscription` soft-deletes the subscription
+  - `update_subscription` → `_handle_update_subscription` deactivates old record, inserts new one with `replaces_id`
   - `general_chat` → LLM-authored response_text
 - `report` → Reporting (Gemini Flash) → narrative summary via Telegram. Handles empty data gracefully.
 - `analysis` → Analytics (Gemini Pro) → period comparison / trend analysis via Telegram. Handles empty data gracefully.
@@ -70,7 +73,7 @@ FastAPI app (`src/main.py`) + a separate cron worker process (`src/worker.py`, s
 
 **Schemas.** All cross-boundary data (agent I/O, webhook payloads, API responses) goes through Pydantic models in `src/core/schemas.py`. Add new contracts there, not inline.
 
-**Auth.** Telegram webhook validates `from_id` and `chat_id` against `settings.allowed_user_ids` (derived from `TELEGRAM_ALLOWED_USER_IDS`, comma-separated). The Android notification endpoint (`POST /api/webhook/notification`) uses the same allow-list via `X-User-Id` header.
+**Auth.** Access is gated on `UserDocument.is_active`. Telegram webhook resolves the sender's `chat_id` to a `UserDocument` via `user_repo.find_by_chat_id()` and rejects inactive accounts. The Android notification endpoint (`POST /api/webhook/notification`) resolves `X-User-Id` via `user_repo.find_by_id()` with the same active check. Mobile REST endpoints (`/api/mobile/*`) use JWT (`Authorization: Bearer <token>`); the `get_current_user` dependency verifies the token, looks up the user, and rejects inactive accounts. To disable a user, set `UserDocument.is_active = False` — no config change or redeploy needed.
 
 ## Conventions
 
@@ -97,5 +100,5 @@ The following areas need unit test coverage (tracked for future implementation):
 - `tests/unit/test_utils.py` — verify `get_comparison_ranges()` and `get_budget_window()` return correct date pairs.
 - `tests/unit/test_webhook.py` — verify guard clauses (stale message filter, dedup, rate limiting) and command routing (`/nudge`, `/start`, `/help`). Verify `/api/webhook/notification` rejects unknown `X-User-Id`.
 - `tests/unit/test_reporting_agent.py` — verify HTML-formatted report generation.
-- `tests/unit/test_subscription_repo.py` — verify `mark_charged` advances `next_charge_date` correctly for all three periods; `_is_recurring_pattern` edge cases.
+- `tests/unit/test_subscription_repo.py` — verify `_advance_date` anchors end-of-month correctly across months (Jan 31 → Feb 28 → Mar 31), leap-year Feb 29, and short months (Apr 30 → May 31); verify `anchor_day=None` fallback uses `current.day`.
 - `tests/unit/test_worker.py` — mock repos, verify `_collect_triggers` returns correct trigger types for budget warnings, spending spikes, and impulse detection; verify empty repos return empty trigger list.

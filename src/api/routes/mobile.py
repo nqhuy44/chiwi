@@ -271,6 +271,10 @@ async def list_subscriptions(
         elif period == "yearly":
             monthly_total += amount / 12
 
+        last_charged = s.last_charged_at
+        if last_charged and last_charged.tzinfo is None:
+            last_charged = last_charged.replace(tzinfo=UTC)
+
         items.append(
             MobileSubscriptionItem(
                 id=str(s.id),
@@ -278,6 +282,7 @@ async def list_subscriptions(
                 amount=amount,
                 period=period,
                 next_charge_date=ncd,
+                last_charged_at=last_charged,
                 due_in_days=due_in,
                 is_overdue=is_overdue,
             )

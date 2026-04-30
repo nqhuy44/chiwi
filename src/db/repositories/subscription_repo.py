@@ -1,14 +1,49 @@
 """Subscription repository for MongoDB operations using Beanie ODM."""
 
+import calendar
 import logging
 import re
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 from beanie import PydanticObjectId
+from dateutil.relativedelta import relativedelta
 from src.db.models.subscription import SubscriptionDocument
 
 logger = logging.getLogger(__name__)
 
-_PERIOD_DAYS = {"weekly": 7, "monthly": 30, "yearly": 365}
+# Day-boundary arithmetic must happen in local time so "end of month" anchors
+# (e.g. anchor_day=31) resolve correctly regardless of UTC offset.
+_LOCAL_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+
+
+def _advance_date(current: datetime, period: str, anchor_day: int | None) -> datetime:
+    """Return the next charge date, preserving the anchor day-of-month for monthly/yearly.
+
+    Arithmetic is performed in Asia/Ho_Chi_Minh time so that an anchor_day of 31
+    always lands on the last day of the target month in local time, not UTC.
+    """
+    if period == "weekly":
+        return current + timedelta(days=7)
+
+    # Normalise to local time for calendar arithmetic
+    aware = current if current.tzinfo else current.replace(tzinfo=UTC)
+    local = aware.astimezone(_LOCAL_TZ)
+
+    if period == "yearly":
+        candidate = local + relativedelta(years=1)
+        if anchor_day:
+            last = calendar.monthrange(candidate.year, candidate.month)[1]
+            candidate = candidate.replace(day=min(anchor_day, last))
+    else:
+        # monthly (default)
+        effective = anchor_day or local.day
+        candidate = local + relativedelta(months=1)
+        last = calendar.monthrange(candidate.year, candidate.month)[1]
+        candidate = candidate.replace(day=min(effective, last))
+
+    # Return in same tz-awareness as input
+    result = candidate.astimezone(UTC)
+    return result if current.tzinfo else result.replace(tzinfo=None)
 
 
 class SubscriptionRepository:
@@ -57,8 +92,7 @@ class SubscriptionRepository:
         if not sub or sub.user_id != user_id:
             return
         
-        days = _PERIOD_DAYS.get(sub.period, 30)
-        next_date = sub.next_charge_date + timedelta(days=days)
+        next_date = _advance_date(sub.next_charge_date, sub.period, sub.anchor_day)
         
         await sub.set({
             SubscriptionDocument.last_charged_at: charged_at,

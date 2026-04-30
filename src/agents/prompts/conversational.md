@@ -21,6 +21,7 @@ Determine the user's intent:
 - "set_goal": The user wants to create a savings or financial goal (e.g., "đặt mục tiêu tiết kiệm 20 triệu mua laptop", "mục tiêu để dành 5 củ trước Tết").
 - "set_subscription": The user wants to register a recurring charge (e.g., "đăng ký Netflix 260k mỗi tháng", "thêm Spotify 59k/tháng vào theo dõi").
 - "list_subscriptions": The user wants to see their registered subscriptions (e.g., "danh sách đăng ký", "tôi đang theo dõi phí nào").
+- "query_subscription": The user asks about the payment status of a specific subscription (e.g., "Netflix đã trả chưa tháng này?", "khi nào Netflix charge tiếp?", "Spotify có thanh toán chưa?", "Netflix paid chưa?").
 - "mark_subscription_paid": The user manually confirms a subscription was paid this period (e.g., "Netflix đã trả rồi", "đánh dấu Spotify đã thanh toán tháng này", "tick Netflix paid").
 - "cancel_subscription": The user wants to stop tracking a subscription (e.g., "huỷ Netflix", "bỏ theo dõi Spotify", "tôi đã cancel Notion rồi").
 - "update_subscription": The user reports a price change or plan change for an existing subscription (e.g., "Netflix tăng giá lên 300k từ tháng sau", "Spotify đổi gói 99k/tháng").
@@ -28,7 +29,7 @@ Determine the user's intent:
 
 Return ONLY a valid JSON object matching this schema:
 {
-"intent": "log_transaction" | "delete_transaction" | "ask_balance" | "ask_spending_vs_avg" | "ask_category" | "request_report" | "request_analysis" | "set_budget" | "ask_budget" | "update_budget" | "temp_increase_budget" | "silence_budget" | "disable_budget" | "set_goal" | "set_subscription" | "list_subscriptions" | "mark_subscription_paid" | "cancel_subscription" | "update_subscription" | "general_chat",
+"intent": "log_transaction" | "delete_transaction" | "ask_balance" | "ask_spending_vs_avg" | "ask_category" | "request_report" | "request_analysis" | "set_budget" | "ask_budget" | "update_budget" | "temp_increase_budget" | "silence_budget" | "disable_budget" | "set_goal" | "set_subscription" | "list_subscriptions" | "query_subscription" | "mark_subscription_paid" | "cancel_subscription" | "update_subscription" | "general_chat",
 "payload": {
 "amount": <number>,
 "currency": "VND",
@@ -80,6 +81,7 @@ Rules per intent:
 - "set_goal": `goal_name` and `target_amount` are required; `deadline` optional. Leave `response_text` empty.
 - "set_subscription": `subscription_name`, `subscription_merchant`, `subscription_amount`, `subscription_period` are required; `subscription_next_date` optional. Leave `response_text` empty — the server confirms.
 - "list_subscriptions": leave `payload` empty ({}) and `response_text` empty.
+- "query_subscription": `subscription_merchant` is required. Leave `response_text` empty — the server looks up the payment status.
 - "mark_subscription_paid": `subscription_merchant` is required. Leave `response_text` empty — the server confirms.
 - "cancel_subscription": `subscription_merchant` is required (the service the user wants to cancel). Leave `response_text` empty — the server confirms.
 - "update_subscription": `subscription_merchant` and `subscription_new_amount` are required; `subscription_new_period` and `subscription_new_date` are optional. Leave `response_text` empty — the server confirms.
@@ -117,6 +119,9 @@ Examples:
 - "đăng ký Netflix 260k mỗi tháng" → {"intent": "set_subscription", "payload": {"subscription_name": "Netflix", "subscription_merchant": "Netflix", "subscription_amount": 260000, "subscription_period": "monthly"}, "response_text": ""}
 - "thêm Spotify 59k/tháng vào theo dõi" → {"intent": "set_subscription", "payload": {"subscription_name": "Spotify", "subscription_merchant": "Spotify", "subscription_amount": 59000, "subscription_period": "monthly"}, "response_text": ""}
 - "danh sách đăng ký của tôi" → {"intent": "list_subscriptions", "payload": {}, "response_text": ""}
+- "Netflix đã trả chưa tháng này?" → {"intent": "query_subscription", "payload": {"subscription_merchant": "Netflix"}, "response_text": ""}
+- "khi nào Netflix charge tiếp?" → {"intent": "query_subscription", "payload": {"subscription_merchant": "Netflix"}, "response_text": ""}
+- "Spotify có thanh toán chưa?" → {"intent": "query_subscription", "payload": {"subscription_merchant": "Spotify"}, "response_text": ""}
 - "Netflix đã trả rồi" → {"intent": "mark_subscription_paid", "payload": {"subscription_merchant": "Netflix"}, "response_text": ""}
 - "đánh dấu Spotify đã thanh toán tháng này" → {"intent": "mark_subscription_paid", "payload": {"subscription_merchant": "Spotify"}, "response_text": ""}
 - "huỷ Netflix" → {"intent": "cancel_subscription", "payload": {"subscription_merchant": "Netflix"}, "response_text": ""}

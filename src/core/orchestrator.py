@@ -344,6 +344,14 @@ class Orchestrator:
         if intent_result.intent == "list_subscriptions":
             return await self._handle_list_subscriptions({"user_id": user_id})
 
+        if intent_result.intent == "query_subscription":
+            return await self._handle_query_subscription(
+                {
+                    "user_id": user_id,
+                    "merchant_name": intent_result.payload.get("subscription_merchant"),
+                }
+            )
+
         if intent_result.intent == "mark_subscription_paid":
             return await self._handle_mark_subscription_paid(
                 {
@@ -1139,9 +1147,9 @@ class Orchestrator:
             except (ValueError, TypeError):
                 next_charge = None
         if not next_charge:
-            # Default: 1 month from now
-            from datetime import timedelta
-            next_charge = datetime.now(UTC) + timedelta(days=30)
+            from dateutil.relativedelta import relativedelta as _rd
+            _periods = {"weekly": dict(weeks=1), "yearly": dict(years=1)}
+            next_charge = datetime.now(UTC) + (_rd(**_periods[period]) if period in _periods else _rd(months=1))
 
         sub = SubscriptionDocument(
             user_id=user_id,
@@ -1150,6 +1158,7 @@ class Orchestrator:
             amount=float(amount),
             period=period,
             next_charge_date=next_charge,
+            anchor_day=next_charge.day,
             source="manual",
         )
         sub_id = await self._subscription_repo.insert(sub)
@@ -1201,6 +1210,78 @@ class Orchestrator:
             "status": "success",
             "response_text": "📋 <b>Phí định kỳ đang theo dõi:</b>\n\n" + "\n".join(lines),
         }
+
+    async def _handle_query_subscription(self, payload: dict) -> dict:
+        """Return payment status for a single named subscription."""
+        from zoneinfo import ZoneInfo
+        user_id = payload.get("user_id")
+        merchant_name = payload.get("merchant_name")
+        if not user_id or not merchant_name:
+            return {"status": "error", "response_text": "Cho Mai biết tên dịch vụ muốn kiểm tra nha!"}
+
+        sub = await self._subscription_repo.find_by_merchant(user_id, merchant_name)
+        if not sub:
+            return {
+                "status": "success",
+                "response_text": (
+                    f"Mai không thấy đăng ký nào cho <b>{merchant_name}</b>. "
+                    "Nhắn <i>'đăng ký Netflix 260k mỗi tháng'</i> để thêm nhé!"
+                ),
+            }
+
+        local_tz = ZoneInfo(settings.business_timezone)
+        now_local = datetime.now(UTC).astimezone(local_tz)
+        period_label = {"monthly": "tháng", "weekly": "tuần", "yearly": "năm"}
+        period_str = period_label.get(sub.period, "tháng")
+
+        # Determine whether this period has been paid
+        last_charged = sub.last_charged_at
+        paid_this_period = False
+        last_str = "Chưa có lần nào"
+        if last_charged:
+            if last_charged.tzinfo is None:
+                last_charged = last_charged.replace(tzinfo=UTC)
+            last_local = last_charged.astimezone(local_tz)
+            last_str = last_local.strftime("%d/%m/%Y")
+            if sub.period == "monthly":
+                paid_this_period = (last_local.year == now_local.year and last_local.month == now_local.month)
+            elif sub.period == "weekly":
+                paid_this_period = (now_local - last_local).days <= 7
+            elif sub.period == "yearly":
+                paid_this_period = last_local.year == now_local.year
+
+        # Next charge info
+        ncd = sub.next_charge_date
+        if ncd and ncd.tzinfo is None:
+            ncd = ncd.replace(tzinfo=UTC)
+        ncd_local = ncd.astimezone(local_tz) if ncd else None
+        next_str = ncd_local.strftime("%d/%m/%Y") if ncd_local else "?"
+        due_days = int((ncd - datetime.now(UTC)).total_seconds() / 86400) if ncd else None
+
+        if paid_this_period:
+            due_text = f"Kỳ tiếp: <b>{next_str}</b>"
+            if due_days is not None:
+                due_text += f" (còn {due_days} ngày)" if due_days >= 0 else f" (quá hạn {abs(due_days)} ngày rồi!)"
+            text = (
+                f"✅ <b>{sub.name}</b> — {sub.amount:,.0f}đ/{period_str}\n"
+                f"Đã thanh toán: {last_str}\n"
+                f"{due_text}"
+            )
+        else:
+            if due_days is not None and due_days < 0:
+                due_text = f"⚠️ Quá hạn {abs(due_days)} ngày (ngày hẹn: {next_str})"
+            elif due_days is not None and due_days <= 3:
+                due_text = f"⏰ Sắp đến hạn: <b>{next_str}</b> (còn {due_days} ngày)"
+            else:
+                due_text = f"Kỳ tới: <b>{next_str}</b>" + (f" (còn {due_days} ngày)" if due_days is not None else "")
+            text = (
+                f"🔄 <b>{sub.name}</b> — {sub.amount:,.0f}đ/{period_str}\n"
+                f"Chưa thanh toán kỳ này\n"
+                f"Lần cuối: {last_str}\n"
+                f"{due_text}"
+            )
+
+        return {"status": "success", "response_text": text}
 
     async def _handle_mark_subscription_paid(self, payload: dict) -> dict:
         """Manually mark a subscription as paid for the current period."""
@@ -1327,8 +1408,9 @@ class Orchestrator:
             except (ValueError, TypeError):
                 pass
         if not next_charge:
-            days = {"weekly": 7, "monthly": 30, "yearly": 365}.get(period, 30)
-            next_charge = now + timedelta(days=days)
+            from dateutil.relativedelta import relativedelta as _rd
+            _periods = {"weekly": dict(weeks=1), "yearly": dict(years=1)}
+            next_charge = now + (_rd(**_periods[period]) if period in _periods else _rd(months=1))
 
         new_sub = SubscriptionDocument(
             user_id=user_id,
@@ -1337,6 +1419,7 @@ class Orchestrator:
             amount=float(new_amount),
             period=period,
             next_charge_date=next_charge,
+            anchor_day=next_charge.day,
             source=old_sub.source or "manual",
             replaces_id=old_sub_id,
         )

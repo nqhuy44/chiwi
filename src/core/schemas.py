@@ -242,6 +242,7 @@ class MobileSubscriptionItem(BaseModel):
     amount: float
     period: str
     next_charge_date: datetime
+    last_charged_at: datetime | None = None
     due_in_days: int
     is_overdue: bool
 

@@ -19,13 +19,15 @@ erDiagram
     USER {
         PydanticObjectId id PK
         string user_id UK "platform-agnostic ID"
+        string username UK
         string hashed_password
         string refresh_token_hash
-        string display_name
+        string full_name
         string telegram_chat_id
-        list channels "['android', 'telegram']"
-        bool is_active
+        string link_code "6-digit Telegram linking code"
+        bool is_active "false = account disabled"
         datetime created_at
+        datetime updated_at
     }
 
     USER_PROFILE {
@@ -100,15 +102,17 @@ Primary user record.
 | Field | Type | Description |
 |---|---|---|
 | `id` | PydanticObjectId | Primary key (MongoDB `_id`) |
-| `user_id` | string | **Unique**. Primary identity (e.g. mobile UUID or Telegram ID) |
+| `user_id` | string | **Unique**. Primary identity (username used as ID at registration) |
+| `username` | string | **Unique**. Login name |
 | `hashed_password` | string | Bcrypt hash for mobile login |
 | `refresh_token_hash` | string | Hash of current refresh token |
-| `display_name` | string | User display name |
-| `telegram_chat_id` | string | Telegram chat ID for messaging |
-| `channels` | list | `["android", "telegram"]` |
-| `is_active` | bool | Account status |
-| `created_at` | datetime | Account creation timestamp |
-| `updated_at` | datetime | Last update timestamp |
+| `full_name` | string | Display name |
+| `telegram_chat_id` | string | Linked Telegram chat ID (set via `/link` flow) |
+| `link_code` | string | 6-digit one-time code for Telegram account linking |
+| `link_code_expires` | datetime | Expiry of the linking code (10-minute window) |
+| `is_active` | bool | **Account status. `false` = disabled.** All entry points reject inactive accounts. |
+| `created_at` | datetime | Account creation timestamp (UTC) |
+| `updated_at` | datetime | Last update timestamp (UTC) |
 
 **Indexes**: `user_id` (unique)
 
@@ -116,11 +120,11 @@ Primary user record.
 
 ### `user_profiles`
 
-Personalization preferences stored in MongoDB. Migrated from `config/user_profiles.json` in Phase B.
+Personalization preferences — editable via the Android Settings screen (`PUT /api/mobile/profile`).
 
 | Field | Type | Description |
 |---|---|---|
-| `chat_id` | string | Telegram chat ID for delivering nudges |
+| `user_id` | string | FK → `users.user_id` |
 | `timezone` | string | IANA timezone (e.g. `"Asia/Ho_Chi_Minh"`). Drives day-boundary math and LLM date formatting. Storage is always UTC. |
 | `occupation` | string | e.g., `"Senior DevOps Engineer"` |
 | `hobbies` | list | e.g., `["film_photography", "coffee"]` |
@@ -129,6 +133,7 @@ Personalization preferences stored in MongoDB. Migrated from `config/user_profil
 | `nudge_frequency` | string | `daily` / `weekly` / `off` |
 | `language` | string | Default `"vi"` |
 | `extras` | dict | Free-form personalisation hints |
+| `updated_at` | datetime | Last profile update (UTC) |
 
 ---
 
@@ -233,8 +238,9 @@ Registered recurring charges for reminder and auto-match tracking.
 | `amount` | float | Expected charge amount |
 | `currency` | string | e.g. "VND" |
 | `period` | string | `weekly` / `monthly` / `yearly` |
-| `next_charge_date` | datetime | Next expected charge date (UTC). Automatically advanced by one period on each charge. |
-| `last_charged_at` | datetime | When the last charge was recorded (UTC) |
+| `next_charge_date` | datetime | Next expected charge date (UTC, midnight VN = 17:00 UTC). Advanced by `_advance_date` in `subscription_repo.py`. |
+| `anchor_day` | int\|null | Preferred day-of-month for the charge (e.g. `31` = end of month). `_advance_date` snaps the next month's date to `min(anchor_day, last_day_of_month)` in `Asia/Ho_Chi_Minh` time. `null` falls back to the day component of `next_charge_date`. |
+| `last_charged_at` | datetime\|null | When the last charge was recorded (UTC). Used by `query_subscription` to compute the paid-this-period flag. |
 | `is_active` | bool | `false` = soft-deleted |
 | `source` | string | `manual` (user-registered via chat) or `auto_detected` (future: detected from pattern) |
 | `cancellation_reason` | string\|null | `"manual"` (user cancelled) or `"replaced"` (superseded by an update) |
@@ -244,10 +250,11 @@ Registered recurring charges for reminder and auto-match tracking.
 **Indexes**: `user_id` + `is_active`, `user_id` + `merchant_name` + `is_active` (matching), `user_id` + `next_charge_date` (reminder queries)
 
 **Lifecycle**:
-- Created via `set_subscription` chat intent or future auto-detection.
-- `next_charge_date` advances by one period when: (a) an incoming transaction matches the merchant, or (b) user says "Netflix đã trả rồi" (`mark_subscription_paid`).
+- Created via `set_subscription` chat intent or future auto-detection. `anchor_day` is set from the day component of the first `next_charge_date` (in VN local time).
+- `next_charge_date` is advanced by `_advance_date(current, period, anchor_day)` in `SubscriptionRepository.mark_charged` when: (a) an incoming transaction matches the merchant, or (b) user says "Netflix đã trả rồi" (`mark_subscription_paid`). Arithmetic is performed in `Asia/Ho_Chi_Minh` time so that `anchor_day=31` always lands on the last day of the next month regardless of UTC offset.
 - **Update pattern** (`update_subscription`): the existing record is deactivated with `cancellation_reason="replaced"`, and a new record is inserted with `replaces_id` pointing to the old `_id`. This preserves full subscription history.
 - Worker queries `find_upcoming(within_hours=48)` to fire `subscription_reminder` nudges.
+- `query_subscription` intent: returns per-subscription status (last charged, next charge, paid-this-period). "Paid this period" is computed in VN local time: same calendar month for `monthly`, within 7 days for `weekly`, same year for `yearly`.
 
 ---
 
@@ -307,7 +314,9 @@ All keys prefixed with `chiwi:`.
 | `chiwi:session:{chat_id}` | Hash | 30 min | Conversation state & context |
 | `chiwi:rate_limit:{chat_id}` | Counter | 1 min | Per-user API rate limiting |
 | `chiwi:telegram:update:{update_id}` | String | 5 min | Dedup Telegram webhook updates |
-| `chiwi:merchant_cache:{merchant}` | String | 7 days | Merchant → category hot cache (invalidated on correction) |
+| `chiwi:merchant:{user_id}:{merchant}` | String | 7 days | Per-user merchant → category hot cache (invalidated on correction) |
+| `chiwi:dashboard:{user_id}` | String (JSON) | 5 min | Pre-computed mobile dashboard payload (invalidated on every transaction write/delete/correction) |
+| `chiwi:last_txn:{user_id}` | String | session | ID of the user's most recent transaction (used by "delete last" shortcut) |
 
 ## Migration Strategy
 

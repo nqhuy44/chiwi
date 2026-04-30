@@ -79,9 +79,11 @@ Three input channels:
 - **API Clients**: Standard REST clients using the `/api/mobile/*` endpoints.
 
 ### 2. API Gateway (FastAPI)
-- **Authentication**: 
-    - **Phase A**: Validates users against `ALLOWED_USER_IDS` allow-list.
-- **Phase B (Complete)**: JWT-based authentication for mobile clients (`/api/auth/*`). Supports registration, login, and token rotation (access/refresh).
+- **Authentication**: All access is gated on `UserDocument.is_active`.
+    - **Mobile REST** (`/api/mobile/*`, `/api/auth/*`): JWT Bearer token. The `get_current_user` dependency decodes the token, looks up the user, and rejects disabled accounts.
+    - **Telegram webhook**: `chat_id` resolved to a `UserDocument` via DB lookup; inactive accounts are silently dropped.
+    - **Android notification webhook** (`POST /api/webhook/notification`): `X-User-Id` header resolved via DB lookup with the same active check.
+    - To disable a user: set `UserDocument.is_active = False` — no config change or redeploy needed.
 - **Phase D (Complete)**: Data Portability & Privacy. Implements manual export (CSV/JSON), manual report/analysis triggers, and full account deletion (GDPR compliance).
 - **PII Masking**: Strips sensitive identifiers before forwarding to AI agents.
 - **Routing**: Dispatches incoming events to the Agent Orchestrator.
@@ -105,6 +107,7 @@ Six specialized agents, each with a distinct system prompt and toolset. See [AGE
 - **Telegram Bot** (Optional): confirming, nudging, and quick interactions via inline buttons if a token is provided.
 - **Android App**: Consumes the `/api/mobile/*` REST endpoints. Unified notification feed and pre-computed dashboard.
 - Endpoints: `/api/mobile/dashboard`, `/transactions`, `/budgets`, `/goals`, `/subscriptions`, `/nudges`, `/profile`.
+- `/api/mobile/subscriptions` returns `last_charged_at` alongside `next_charge_date` and `due_in_days`, enabling the Android app to derive upcoming-payment and recently-paid views client-side.
 
 ## Deployment Architecture
 
@@ -207,7 +210,7 @@ chiwi/
 | Layer | Mechanism |
 |---|---|
 | **Transport** | HTTPS for all external communication (Telegram webhook, Gemini API) |
-| **Authentication** | Telegram `user_id` allow-list at Gateway level |
+| **Authentication** | `UserDocument.is_active` DB check for all entry points (Telegram, Android webhook, JWT for mobile REST) |
 | **PII Protection** | Account numbers and phone numbers stripped before LLM calls |
 | **Data at Rest** | MongoDB encryption enabled |
 | **Secrets** | All credentials via environment variables (`.env`), never hardcoded |
