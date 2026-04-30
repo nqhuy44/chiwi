@@ -1,8 +1,8 @@
 """Mobile API routes — fast read-only endpoints for the Android app.
 
-All endpoints are authenticated via X-User-Id header (same allow-list as the
-notification webhook). No AI is invoked on read endpoints; every read response
-is a direct MongoDB read or a pre-computed Redis-cached dashboard payload.
+All endpoints require a valid JWT for an active user account. No AI is invoked
+on read endpoints; every read response is a direct MongoDB read or a
+pre-computed Redis-cached dashboard payload.
 
 The ``POST /chat`` endpoint is the only write-capable endpoint here — it
 mirrors the Telegram conversational flow, accepting free-form text and
@@ -368,7 +368,7 @@ async def export_data(
             t.category_id or "",
             t.direction,
             ",".join(t.tags) if t.tags else "",
-            t.note or ""
+            ""
         ])
 
     output.seek(0)
@@ -414,6 +414,7 @@ async def delete_account(user_id: str = Depends(get_current_user)):
     # For now, we'll mark as inactive or call a repository method
     await container.user_repo.delete_user_data(user_id)
     return {"status": "ok", "message": "Account data deleted"}
+@router.get("/category-spending", response_model=MobileCategorySpendingResponse)
 async def category_spending(
     user_id: str = Depends(get_current_user),
     period: str = Query("this_month"),
@@ -489,7 +490,7 @@ async def mobile_chat(
     and routes it through the same Orchestrator pipeline as Telegram messages.
     The response is returned as structured JSON instead of a Telegram message.
 
-    Auth: X-User-Id header must be in the configured allow-list.
+    Auth: JWT must belong to an active user account.
     """
     # Authenticated via JWT
 

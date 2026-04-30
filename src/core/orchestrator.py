@@ -509,9 +509,12 @@ class Orchestrator:
                 "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' đâu ạ. Bạn thử 'hôm nay', 'hôm qua', 'tuần này' hoặc 'tháng này' nhé!",
             }
 
-        transactions = await self._transaction_repo.find_by_user(
-            user_id=user_id, start_date=start_date, end_date=end_date, limit=100
-        )
+        transactions = [
+            t.model_dump()
+            for t in await self._transaction_repo.find_by_user(
+                user_id=user_id, start_date=start_date, end_date=end_date, limit=100
+            )
+        ]
 
         request = ReportRequest(
             user_id=user_id, report_type="summary", period=period_str
@@ -551,12 +554,18 @@ class Orchestrator:
                     "response_text": "Mai chưa hỗ trợ mốc thời gian này để so sánh đâu ạ.",
                 }
 
-            current_txns = await self._transaction_repo.find_by_user(
-                user_id=user_id, start_date=cur_start, end_date=cur_end, limit=200
-            )
-            comparison_txns = await self._transaction_repo.find_by_user(
-                user_id=user_id, start_date=comp_start, end_date=comp_end, limit=200
-            )
+            current_txns = [
+                t.model_dump()
+                for t in await self._transaction_repo.find_by_user(
+                    user_id=user_id, start_date=cur_start, end_date=cur_end, limit=200
+                )
+            ]
+            comparison_txns = [
+                t.model_dump()
+                for t in await self._transaction_repo.find_by_user(
+                    user_id=user_id, start_date=comp_start, end_date=comp_end, limit=200
+                )
+            ]
         elif analysis_type == "deep_dive":
             start_date, end_date = resolve_date_range(period_str, start_iso, end_iso, user_tz)
             if not start_date:
@@ -565,9 +574,12 @@ class Orchestrator:
                     "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' để phân tích chi tiết.",
                 }
 
-            current_txns = await self._transaction_repo.find_by_user(
-                user_id=user_id, start_date=start_date, end_date=end_date, limit=500
-            )
+            current_txns = [
+                t.model_dump()
+                for t in await self._transaction_repo.find_by_user(
+                    user_id=user_id, start_date=start_date, end_date=end_date, limit=500
+                )
+            ]
             # Filter to the requested category when specified
             if category_filter:
                 current_txns = [
@@ -585,9 +597,12 @@ class Orchestrator:
                     "response_text": f"Mai chưa hỗ trợ mốc thời gian '{period_str}' để phân tích xu hướng.",
                 }
 
-            current_txns = await self._transaction_repo.find_by_user(
-                user_id=user_id, start_date=start_date, end_date=end_date, limit=200
-            )
+            current_txns = [
+                t.model_dump()
+                for t in await self._transaction_repo.find_by_user(
+                    user_id=user_id, start_date=start_date, end_date=end_date, limit=200
+                )
+            ]
             comparison_txns = None
 
         request = AnalysisRequest(
@@ -790,8 +805,6 @@ class Orchestrator:
             category_id=category_name,
             limit_amount=float(limit_amount),
             period=budget_period,
-            start_date=start_date,
-            end_date=end_date,
         )
         budget_id = await self._budget_repo.insert(budget)
         await self._budget_event_repo.insert(BudgetEventDocument(

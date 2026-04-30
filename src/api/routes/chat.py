@@ -2,7 +2,6 @@
 
 from fastapi import APIRouter, HTTPException, Query
 
-from src.core.config import settings
 from src.core.dependencies import container
 
 router = APIRouter(prefix="/api")
@@ -24,11 +23,12 @@ async def get_report(
 ) -> dict:
     """Generate and return a financial report for a user.
 
-    Auth: ``user_id`` must be in the configured allow-list.
+    Auth: ``user_id`` must belong to an active user account.
     The report is generated on-demand via the Reporting Agent and returned
     as structured JSON (same text that would be sent via Telegram).
     """
-    if user_id not in settings.allowed_user_id_list:
+    user = await container.user_repo.find_by_id(user_id)
+    if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Unauthorized user")
 
     if report_type not in _VALID_REPORT_TYPES:

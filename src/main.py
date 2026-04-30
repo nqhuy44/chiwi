@@ -21,13 +21,6 @@ async def lifespan(app: FastAPI):
     """Manage startup/shutdown lifecycle for all services."""
     logger.info("ChiWi starting up...")
 
-    if not settings.allowed_user_id_list:
-        raise RuntimeError(
-            "ALLOWED_USER_IDS is not configured. "
-            "Set it to a comma-separated list of authorised user IDs in your .env file. "
-            "Example: ALLOWED_USER_IDS=123456789,987654321"
-        )
-
     await container.startup()
     yield
     logger.info("ChiWi shutting down...")

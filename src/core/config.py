@@ -14,7 +14,6 @@ class Settings(BaseSettings):
 
     # Telegram
     telegram_bot_token: str = ""
-    allowed_user_ids: str = ""          # env: ALLOWED_USER_IDS (platform-agnostic)
     telegram_webhook_url: str = ""
     telegram_webhook_secret: str = ""
     telegram_message_max_age_seconds: int = 120  # Drop messages older than this
@@ -57,12 +56,6 @@ class Settings(BaseSettings):
     @property
     def telegram_enabled(self) -> bool:
         return bool(self.telegram_bot_token)
-
-    @property
-    def allowed_user_id_list(self) -> list[str]:
-        if not self.allowed_user_ids:
-            return []
-        return [uid.strip() for uid in self.allowed_user_ids.split(",")]
 
     model_config = {"env_file": ".env", "env_file_encoding": "utf-8", "extra": "ignore"}
 

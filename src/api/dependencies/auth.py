@@ -20,12 +20,14 @@ async def get_current_user(auth: HTTPAuthorizationCredentials = Depends(security
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token: missing subject"
             )
-            
-        # Optional: Verify user still exists in DB
-        # user = await container.user_repo.find_by_id(user_id)
-        # if not user:
-        #     raise HTTPException(status_code=401, detail="User not found")
-            
+
+        user = await container.user_repo.find_by_id(user_id)
+        if not user or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="User not found or disabled"
+            )
+
         return user_id
     except Exception as e:
         logger.warning("Auth failure: %s", str(e))

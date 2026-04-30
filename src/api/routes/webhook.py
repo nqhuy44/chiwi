@@ -127,10 +127,8 @@ async def _handle_callback_query(callback_query: dict) -> None:
     if not chat_id or not cq_data:
         return
 
-    if (
-        chat_id not in settings.allowed_user_ids
-        and from_id not in settings.allowed_user_ids
-    ):
+    user = await container.user_repo.find_by_chat_id(chat_id)
+    if not user or not user.is_active:
         logger.warning("Unauthorized callback from chat_id=%s", chat_id)
         return
 
@@ -345,9 +343,10 @@ async def receive_notification(
     Backend handles all AI parsing (Ingestion Agent) and classification
     (Tagging Agent) so no mobile release is needed when parsing logic changes.
 
-    Auth: X-User-Id header must be in the configured allow-list.
+    Auth: X-User-Id must belong to an active user account.
     """
-    if x_user_id not in settings.allowed_user_id_list:
+    user = await container.user_repo.find_by_id(x_user_id)
+    if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Unauthorized user")
 
     orchestrator = container.orchestrator

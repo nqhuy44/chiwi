@@ -112,11 +112,12 @@ class TaggingAgent:
     ) -> list[dict]:
         if not merchant or self._repo is None:
             return []
-        return await self._repo.find_by_merchant(
+        docs = await self._repo.find_by_merchant(
             user_id=user_id,
             merchant_name=merchant,
             limit=self._history_lookback,
         )
+        return [d.model_dump() for d in docs]
 
     @classmethod
     def _majority_category(

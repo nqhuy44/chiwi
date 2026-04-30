@@ -187,12 +187,15 @@ async def compute_avg(
     else:
         oldest_start = past_windows[-1].start  # oldest window is last in list
 
-    all_txns = await transaction_repo.find_by_user(
-        user_id=user_id,
-        start_date=oldest_start,
-        end_date=current_window.end,
-        limit=1000,
-    )
+    all_txns = [
+        t.model_dump()
+        for t in await transaction_repo.find_by_user(
+            user_id=user_id,
+            start_date=oldest_start,
+            end_date=current_window.end,
+            limit=1000,
+        )
+    ]
 
     if not all_txns:
         return AverageResult(
@@ -279,12 +282,15 @@ async def compute_avg_all_categories(
     else:
         oldest_start = past_windows[-1].start
 
-    all_txns = await transaction_repo.find_by_user(
-        user_id=user_id,
-        start_date=oldest_start,
-        end_date=current_window.end,
-        limit=1000,
-    )
+    all_txns = [
+        t.model_dump()
+        for t in await transaction_repo.find_by_user(
+            user_id=user_id,
+            start_date=oldest_start,
+            end_date=current_window.end,
+            limit=1000,
+        )
+    ]
 
     if not all_txns:
         empty = AverageResult(
