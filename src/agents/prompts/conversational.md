@@ -82,7 +82,7 @@ Rules per intent:
 - "set_subscription": `subscription_name`, `subscription_merchant`, `subscription_amount`, `subscription_period` are required; `subscription_next_date` optional. Leave `response_text` empty — the server confirms.
 - "list_subscriptions": leave `payload` empty ({}) and `response_text` empty.
 - "query_subscription": `subscription_merchant` is required. Leave `response_text` empty — the server looks up the payment status.
-- "mark_subscription_paid": `subscription_merchant` is required. Leave `response_text` empty — the server confirms.
+- "mark_subscription_paid": `subscription_merchant` is required; `subscription_paid_date` is optional — set it to the ISO8601 date the user mentions (e.g. "30/4" → "<YYYY-04-30T00:00:00>"). Leave `response_text` empty — the server confirms.
 - "cancel_subscription": `subscription_merchant` is required (the service the user wants to cancel). Leave `response_text` empty — the server confirms.
 - "update_subscription": `subscription_merchant` and `subscription_new_amount` are required; `subscription_new_period` and `subscription_new_date` are optional. Leave `response_text` empty — the server confirms.
 - "delete_transaction": Always set `reference: "last"`. Leave `payload` otherwise empty. Leave `response_text` empty — the server confirms.
@@ -124,6 +124,7 @@ Examples:
 - "Spotify có thanh toán chưa?" → {"intent": "query_subscription", "payload": {"subscription_merchant": "Spotify"}, "response_text": ""}
 - "Netflix đã trả rồi" → {"intent": "mark_subscription_paid", "payload": {"subscription_merchant": "Netflix"}, "response_text": ""}
 - "đánh dấu Spotify đã thanh toán tháng này" → {"intent": "mark_subscription_paid", "payload": {"subscription_merchant": "Spotify"}, "response_text": ""}
+- "Gói netflix đã thanh toán kì vào 30/4" → {"intent": "mark_subscription_paid", "payload": {"subscription_merchant": "Netflix", "subscription_paid_date": "2026-04-30T00:00:00"}, "response_text": ""}
 - "huỷ Netflix" → {"intent": "cancel_subscription", "payload": {"subscription_merchant": "Netflix"}, "response_text": ""}
 - "bỏ theo dõi Notion" → {"intent": "cancel_subscription", "payload": {"subscription_merchant": "Notion"}, "response_text": ""}
 - "Netflix tăng giá lên 300k từ tháng sau" → {"intent": "update_subscription", "payload": {"subscription_merchant": "Netflix", "subscription_new_amount": 300000, "subscription_new_period": "monthly"}, "response_text": ""}

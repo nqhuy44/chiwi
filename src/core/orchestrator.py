@@ -1235,7 +1235,10 @@ class Orchestrator:
         period_label = {"monthly": "tháng", "weekly": "tuần", "yearly": "năm"}
         period_str = period_label.get(sub.period, "tháng")
 
-        # Determine whether this period has been paid
+        # Determine whether this period has been paid.
+        # A charge was recorded (last_charged_at is set) AND next_charge_date is still in the
+        # future means mark_charged already advanced the date — i.e. the current cycle is paid.
+        # This correctly handles cross-month charges (e.g. charged Apr 30, checked May 1).
         last_charged = sub.last_charged_at
         paid_this_period = False
         last_str = "Chưa có lần nào"
@@ -1244,17 +1247,14 @@ class Orchestrator:
                 last_charged = last_charged.replace(tzinfo=UTC)
             last_local = last_charged.astimezone(local_tz)
             last_str = last_local.strftime("%d/%m/%Y")
-            if sub.period == "monthly":
-                paid_this_period = (last_local.year == now_local.year and last_local.month == now_local.month)
-            elif sub.period == "weekly":
-                paid_this_period = (now_local - last_local).days <= 7
-            elif sub.period == "yearly":
-                paid_this_period = last_local.year == now_local.year
 
-        # Next charge info
-        ncd = sub.next_charge_date
-        if ncd and ncd.tzinfo is None:
-            ncd = ncd.replace(tzinfo=UTC)
+        ncd_for_check = sub.next_charge_date
+        if ncd_for_check and ncd_for_check.tzinfo is None:
+            ncd_for_check = ncd_for_check.replace(tzinfo=UTC)
+        paid_this_period = last_charged is not None and ncd_for_check is not None and ncd_for_check > datetime.now(UTC)
+
+        # Next charge display info (reuse the tz-aware ncd_for_check already computed above)
+        ncd = ncd_for_check
         ncd_local = ncd.astimezone(local_tz) if ncd else None
         next_str = ncd_local.strftime("%d/%m/%Y") if ncd_local else "?"
         due_days = int((ncd - datetime.now(UTC)).total_seconds() / 86400) if ncd else None
@@ -1311,13 +1311,25 @@ class Orchestrator:
             }
 
         sub_id = str(sub.id)
-        await self._subscription_repo.mark_charged(sub_id, user_id, datetime.now(UTC))
-        next_date = sub.next_charge_date
-        from datetime import timedelta
-        period = sub.period
-        days = {"weekly": 7, "monthly": 30, "yearly": 365}.get(period, 30)
-        next_date_advanced = (next_date + timedelta(days=days)) if next_date else None
-        next_str = next_date_advanced.strftime("%d/%m/%Y") if next_date_advanced else "?"
+
+        paid_date_raw = payload.get("subscription_paid_date")
+        charged_at = datetime.now(UTC)
+        if paid_date_raw:
+            try:
+                parsed = datetime.fromisoformat(paid_date_raw)
+                charged_at = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+            except (ValueError, TypeError):
+                pass
+
+        await self._subscription_repo.mark_charged(sub_id, user_id, charged_at)
+
+        from src.db.repositories.subscription_repo import _advance_date
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        from src.core.config import settings as _settings
+        _local_tz = _ZoneInfo(_settings.business_timezone)
+        next_date_advanced = _advance_date(charged_at, sub.period, sub.anchor_day)
+        ncd_local = next_date_advanced.astimezone(_local_tz) if next_date_advanced else None
+        next_str = ncd_local.strftime("%d/%m/%Y") if ncd_local else "?"
 
         logger.info("Subscription '%s' manually marked paid by user %s", merchant_name, user_id)
         return {

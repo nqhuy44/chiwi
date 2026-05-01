@@ -92,7 +92,10 @@ class SubscriptionRepository:
         if not sub or sub.user_id != user_id:
             return
         
-        next_date = _advance_date(sub.next_charge_date, sub.period, sub.anchor_day)
+        # Advance from the actual charge date so that early/late payments
+        # anchor the next cycle to the real charge, not the old scheduled date.
+        # e.g. charged Apr 30 (anchor_day=31) → next = May 31, not Jun 30.
+        next_date = _advance_date(charged_at, sub.period, sub.anchor_day)
         
         await sub.set({
             SubscriptionDocument.last_charged_at: charged_at,
