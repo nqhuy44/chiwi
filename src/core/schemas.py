@@ -145,11 +145,6 @@ class HealthResponse(BaseModel):
 # --- Mobile API ---
 
 
-class MobilePeriodStats(BaseModel):
-    inflow: float
-    outflow: float
-    net: float
-    tx_count: int
 
 
 class MobileCategoryItem(BaseModel):
@@ -157,7 +152,6 @@ class MobileCategoryItem(BaseModel):
     icon: str
     amount: float
     tx_count: int
-    percent: float
 
 
 class MobileTransactionItem(BaseModel):
@@ -190,7 +184,7 @@ class MobileUpcomingSubscription(BaseModel):
 class MobileDashboardResponse(BaseModel):
     computed_at: datetime
     is_cached: bool
-    periods: dict[str, MobilePeriodStats]
+    periods: dict[str, float]
     top_categories: list[MobileCategoryItem]
     recent_transactions: list[MobileTransactionItem]
     budget_alerts: list[MobileBudgetAlert]

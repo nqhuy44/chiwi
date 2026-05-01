@@ -446,17 +446,17 @@ async def category_spending(
         user_id, start_dt, end_dt
     )
 
-    total_outflow = sum(r["total"] for r in totals) or 1
     breakdown = [
         MobileCategoryItem(
             name=r["category_id"],
             icon=icons.get(r["category_id"], "❓"),
             amount=r["total"],
             tx_count=r["tx_count"],
-            percent=round(r["total"] / total_outflow * 100, 1),
         )
         for r in totals
     ]
+    
+    total_outflow = sum(r["total"] for r in totals)
 
     return MobileCategorySpendingResponse(
         period=period,
