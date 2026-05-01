@@ -45,10 +45,14 @@ Missing or expired tokens return **401 Unauthorized**.
 | `this_month` | 1st 00:00 to now |
 | `last_week` | Previous Mon–Sun |
 | `last_month` | Previous calendar month |
+| `last_month_same_period` | From 1st of last month to the same relative day (e.g. May 10 -> April 10) |
 | `last_7_days` | Rolling 7 days |
 | `last_30_days` | Rolling 30 days |
+| `custom` | Requires `start_date` and `end_date` query params |
 
-Unsupported values → **400 Bad Request**.
+**Timezone Note**: All relative periods (today, this_month, etc.) are calculated using the user's specific timezone (default: `Asia/Ho_Chi_Minh`).
+
+---
 
 ---
 
@@ -92,6 +96,12 @@ No query parameters.
       "outflow": 4320000,
       "net": 10680000,
       "tx_count": 47
+    },
+    "last_month_same_period": {
+      "inflow": 12000000,
+      "outflow": 3800000,
+      "net": 8200000,
+      "tx_count": 41
     }
   },
   "top_categories": [
@@ -151,6 +161,8 @@ Paginated transaction list with optional filters.
 | Query param | Type | Default | Description |
 |---|---|---|---|
 | `period` | string | `this_month` | See period table above |
+| `start_date` | string | — | ISO8601 date, e.g. `2026-04-01` (overrides period) |
+| `end_date` | string | — | ISO8601 date, e.g. `2026-04-10` (overrides period) |
 | `category` | string | — | Filter by category name, e.g. `Ăn uống` |
 | `direction` | string | — | `inflow` or `outflow` |
 | `limit` | int | `20` | Page size, 1–100 |
@@ -380,6 +392,9 @@ Category breakdown for a period — suitable for pie charts and bar charts.
 | Query param | Type | Default | Description |
 |---|---|---|---|
 | `period` | string | `this_month` | See period table above |
+| `start_date` | string | — | ISO8601 date (overrides period) |
+| `end_date` | string | — | ISO8601 date (overrides period) |
+
 
 #### Response `200`
 

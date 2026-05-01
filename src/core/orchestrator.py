@@ -481,11 +481,11 @@ class Orchestrator:
         chat_id = payload.get("chat_id")
         nudge_type = payload.get("nudge_type")
 
-        if not user_id or not chat_id or not nudge_type:
+        if not user_id or not nudge_type:
             return {
                 "status": "error",
                 "reason": "missing_fields",
-                "required": ["user_id", "chat_id", "nudge_type"],
+                "required": ["user_id", "nudge_type"],
             }
 
         request = NudgeRequest(

@@ -61,6 +61,36 @@ class GeminiService:
             settings.gemini_model_flash, system_prompt, audio_bytes, audio_mime_type
         )
 
+    async def generate_text(
+        self, prompt: str, system_instruction: str | None = None, model: str = "flash"
+    ) -> str:
+        """Generate plain text (non-JSON) using Gemini."""
+        if self._client is None:
+            return ""
+
+        target_model = settings.gemini_model_pro if model == "pro" else settings.gemini_model_flash
+        
+        for attempt in range(1, MAX_RETRIES + 1):
+            try:
+                response = await self._client.aio.models.generate_content(
+                    model=target_model,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.7,
+                    ),
+                )
+                return (response.text or "").strip()
+            except ClientError as exc:
+                if exc.code == 429:
+                    delay = BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+                    await asyncio.sleep(delay)
+                    continue
+                return ""
+            except Exception:
+                return ""
+        return ""
+
     async def _invoke(
         self,
         model: str,

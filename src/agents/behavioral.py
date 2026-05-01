@@ -67,10 +67,17 @@ class BehavioralAgent:
 
         # Generate message via Gemini
         prompt = self._build_user_msg(request, profile)
-        message = await self._gemini.generate_text(
-            prompt, system_instruction=SYSTEM_PROMPT, model="flash"
-        )
-        message = message.strip()
+        result = await self._gemini.call_flash(SYSTEM_PROMPT, prompt)
+        
+        message = (result.get("message") or "").strip()
+        should_send = result.get("should_send", True)
+        llm_blocked_reason = result.get("blocked_reason")
+
+        if not should_send:
+            return self._blocked(llm_blocked_reason or "llm_skipped")
+
+        if not message:
+            return self._blocked("empty_message")
 
         # Build Title based on type
         title_map = {
@@ -79,7 +86,8 @@ class BehavioralAgent:
             "goal_milestone": "🎯 Chúc mừng bạn!",
             "subscription_reminder": "🔄 Nhắc lịch thanh toán",
             "impulse_check": "🤔 Suy nghĩ kỹ nhé",
-            "saving_streak": "⭐ Phong độ tuyệt vời"
+            "saving_streak": "⭐ Phong độ tuyệt vời",
+            "daily_analysis": "☀️ Phân tích chi tiêu hôm qua"
         }
         title = title_map.get(request.nudge_type, "ChiWi Insight")
 

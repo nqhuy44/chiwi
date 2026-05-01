@@ -84,7 +84,7 @@ class UserProfile(BaseModel):
 
 class NudgeRequest(BaseModel):
     user_id: str
-    chat_id: str
+    chat_id: str | None = None
     nudge_type: str
     trigger_data: dict = Field(default_factory=dict)
 

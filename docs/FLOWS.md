@@ -107,21 +107,23 @@ sequenceDiagram
 
     Cron->>Profiles: configured_user_ids()
     loop For each configured user
-        Cron->>Cron: _collect_triggers(user_id) → trigger list
-        Note over Cron: Phase 3.2 seam: spending_alert,<br/>budget_warning, goal_progress etc.
+        Cron->>Cron: _daily_analysis_trigger(user_id)
+        Note over Cron: Compares yesterday vs daily avg.<br/>Always triggers if transactions exist.
+        Cron->>Cron: _collect_triggers(user_id) → event trigger list
+        Note over Cron: Phase 3.2: spending_alert,<br/>budget_warning, goal_progress etc.
         loop For each trigger
             Cron->>Orch: route("scheduled", {user_id, nudge_type, trigger_data, chat_id})
             Orch->>BA: analyze(NudgeRequest)
             BA->>Profiles: get_profile(user_id) → timezone, hobbies, tone
             BA->>BA: _spam_check()
-            Note over BA: quiet hours 22:00–07:00 (user tz)<br/>daily limit (NUDGE_MAX_PER_DAY)<br/>24 h dedup by nudge_type
+            Note over BA: daily_analysis skips some spam checks.<br/>Quiet hours 22:00–07:00 (user tz).
             alt Spam check passes
                 BA->>BA: Build TOON payload (profile + trigger_data)
-                BA->>BA: Gemini Pro → {message, should_send}
+                BA->>BA: Gemini Flash → {message, should_send}
                 alt should_send = true
                     BA->>TG: send_silent_message(chat_id, message)
                     BA->>NudgeRepo: insert(NudgeDocument)
-                    TG->>User: "☕ 500k cafe — bằng nửa cuộn Kodak Portra!"
+                    TG->>User: "☀️ Hôm qua bạn đã chi 747k..."
                 end
             end
         end

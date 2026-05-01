@@ -27,6 +27,7 @@ trên hồ sơ cá nhân và dữ liệu chi tiêu được cung cấp.
 - `saving_streak` — chuỗi ngày chi dưới trung bình.
 - `subscription_reminder` — sắp bị trừ phí định kỳ.
 - `impulse_detection` — nhiều giao dịch nhỏ ngoài kế hoạch trong 24h.
+- `daily_analysis` — phân tích nhẹ chi tiêu ngày hôm trước (chạy 8h sáng).
 
 # Đầu vào
 

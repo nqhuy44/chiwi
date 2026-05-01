@@ -19,6 +19,7 @@ The Behavioral Agent proactively analyzes spending patterns and sends personaliz
 | **Saving Streak** | 3+ consecutive days below daily average | Once per streak |
 | **Subscription Reminder** | Recurring charge detected (same amount, monthly) | 1 day before |
 | **Impulse Detection** | 3+ unplanned purchases in 24 hours | Max 1/day |
+| **Daily Analysis** | Every day at 08:00 (summary & insights for yesterday) | Daily |
 
 ## Personalization Strategy
 
@@ -50,20 +51,23 @@ User Profile:
 ```mermaid
 flowchart TD
     A["⏰ Cron Trigger (Daily 08:00)"] --> B[Load User Profile]
-    B --> C[Query Last 7 Days Transactions]
-    C --> D[Aggregate by Category]
-    D --> E{Compare vs Historical Average}
-    E -->|Anomaly Detected| F["Gemini Pro: Generate Nudge"]
-    E -->|Normal| G[Check Budget Thresholds]
-    G -->|Threshold Crossed| F
-    G -->|OK| H[Check Goal Progress]
-    H -->|Milestone| F
-    H -->|No Change| I[Check Saving Streak]
-    I -->|Streak Active| F
-    I -->|No Streak| J[No Nudge Today]
-    F --> K[Check Anti-Spam Rules]
-    K -->|Allowed| L[Send via Telegram + Store in DB]
-    K -->|Blocked| J
+    B --> C[Fetch Yesterday's Spending & Daily Average]
+    C --> D["Daily Analysis Trigger (Always Generated)"]
+    D --> E[Query Last 7 Days Transactions]
+    E --> F[Aggregate by Category]
+    F --> G{Compare vs Historical Average}
+    G -->|Anomaly Detected| H["Gemini Flash: Generate Nudge"]
+    G -->|Normal| I[Check Budget Thresholds]
+    I -->|Threshold Crossed| H
+    I -->|OK| J[Check Goal Progress]
+    J -->|Milestone| H
+    J -->|No Change| K[Check Saving Streak]
+    K -->|Streak Active| H
+    K -->|No Streak| L[No Event Nudge Today]
+    H --> M[Check Anti-Spam Rules]
+    M -->|Allowed| N[Send via Telegram + Store in DB]
+    M -->|Blocked| L
+    D --> H
 ```
 
 ## Effectiveness Tracking

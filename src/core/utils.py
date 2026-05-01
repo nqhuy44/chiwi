@@ -70,6 +70,23 @@ def get_date_range(
         yesterday = today - timedelta(days=1)
         return _local_day_bounds(yesterday, tz)
 
+    if period == "last_month_same_period":
+        # First day of this month
+        first_of_this_month = today.replace(day=1)
+        # Last month boundaries
+        last_month_ref = first_of_this_month - timedelta(days=1)
+        start_of_last_month = last_month_ref.replace(day=1)
+
+        # Determine the "same day" in last month
+        _, last_month_max_days = monthrange(start_of_last_month.year, start_of_last_month.month)
+        same_day_last_month = min(today.day, last_month_max_days)
+
+        end_date_last_month = start_of_last_month.replace(day=same_day_last_month)
+
+        start, _ = _local_day_bounds(start_of_last_month, tz)
+        _, end = _local_day_bounds(end_date_last_month, tz)
+        return start, end
+
     return None, None
 
 
@@ -78,25 +95,30 @@ def parse_custom_range(
     end_iso: str | None,
     timezone: str | None = None,
 ) -> Tuple[datetime | None, datetime | None]:
-    """Parse ISO8601 start/end strings (from LLM) into a UTC datetime pair.
+    """Parse ISO8601 start/end strings into a UTC datetime pair.
 
     Strings without tzinfo are interpreted in the user/business timezone.
     Returns (None, None) on any parse failure.
     """
     tz = _resolve_tz(timezone)
 
-    def _parse(s: str | None) -> datetime | None:
+    def _parse(s: str | None, is_end: bool = False) -> datetime | None:
         if not s:
             return None
         try:
-            dt = datetime.fromisoformat(s)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=tz)
+            # Handle plain dates like "2026-05-01"
+            if len(s) == 10:
+                d = date.fromisoformat(s)
+                dt = datetime.combine(d, time.max if is_end else time.min, tzinfo=tz)
+            else:
+                dt = datetime.fromisoformat(s)
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=tz)
             return dt.astimezone(UTC).replace(tzinfo=None)
         except (ValueError, TypeError):
             return None
 
-    return _parse(start_iso), _parse(end_iso)
+    return _parse(start_iso), _parse(end_iso, is_end=True)
 
 
 def resolve_date_range(
@@ -107,10 +129,9 @@ def resolve_date_range(
 ) -> Tuple[datetime | None, datetime | None]:
     """Resolve any period label or custom ISO range to (start_utc, end_utc).
 
-    Use this as the single entry-point in handlers instead of calling
-    get_date_range + parse_custom_range separately.
+    Prioritizes start_iso/end_iso if provided.
     """
-    if period == "custom":
+    if start_iso or end_iso:
         return parse_custom_range(start_iso, end_iso, timezone)
     return get_date_range(period, timezone)
 
@@ -151,7 +172,7 @@ def get_comparison_ranges(
 
     If compare_period is not provided, automatically infer the comparison:
       - this_week  -> last_week
-      - this_month -> last_month
+      - this_month -> last_month_same_period
       - today      -> yesterday
     """
     current = get_date_range(period, timezone)
@@ -161,16 +182,10 @@ def get_comparison_ranges(
     else:
         mapping = {
             "this_week": "last_week",
-            "this_month": "last_month",
+            "this_month": "last_month_same_period",
             "today": "yesterday",
         }
         inferred = mapping.get(period, "last_week")
-
-        if inferred == "yesterday":
-            tz = _resolve_tz(timezone)
-            yesterday = datetime.now(tz).date() - timedelta(days=1)
-            comparison = _local_day_bounds(yesterday, tz)
-        else:
-            comparison = get_date_range(inferred, timezone)
+        comparison = get_date_range(inferred, timezone)
 
     return current, comparison

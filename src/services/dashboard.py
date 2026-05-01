@@ -92,11 +92,13 @@ class DashboardService:
         today_start, today_end = get_date_range("today", tz)
         week_start, week_end = get_date_range("this_week", tz)
         month_start, month_end = get_date_range("this_month", tz)
+        last_month_comp_start, last_month_comp_end = get_date_range("last_month_same_period", tz)
 
         (
             today_txns,
             week_txns,
             month_txns,
+            last_month_comp_txns,
             category_totals,
             recent_txns,
             budgets,
@@ -105,6 +107,7 @@ class DashboardService:
             self._transaction_repo.find_by_user(user_id, today_start, today_end, limit=200),
             self._transaction_repo.find_by_user(user_id, week_start, week_end, limit=500),
             self._transaction_repo.find_by_user(user_id, month_start, month_end, limit=1000),
+            self._transaction_repo.find_by_user(user_id, last_month_comp_start, last_month_comp_end, limit=1000),
             self._transaction_repo.aggregate_by_category(user_id, month_start, month_end),
             self._transaction_repo.find_by_user(user_id, limit=5),
             self._budget_repo.find_by_user(user_id),
@@ -158,6 +161,7 @@ class DashboardService:
                 "today": _period_stats(today_txns),
                 "this_week": _period_stats(week_txns),
                 "this_month": _period_stats(month_txns),
+                "last_month_same_period": _period_stats(last_month_comp_txns),
             },
             "top_categories": top_categories,
             "recent_transactions": [_fmt_txn(t, icons) for t in recent_txns],

@@ -2,7 +2,7 @@
 
 ## Overview
 
-ChiWi is a **zero-effort, proactive personal finance management system** powered by a Multi-Agent AI Swarm. It automatically captures financial transactions from bank notifications, classifies them using AI, and proactively nudges the user toward healthier spending habits.
+ChiWi is a **zero-effort, proactive personal finance management system** powered by a Multi-Agent AI Swarm. It automatically captures financial transactions from bank notifications, classifies them using AI, provides a daily 8:00 AM spending analysis, and proactively nudges the user toward healthier spending habits.
 
 The system follows a **"Think-First"** strategy: an orchestrator identifies the correct specialized agent before any execution occurs.
 

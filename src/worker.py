@@ -256,41 +256,53 @@ async def _saving_streak_trigger(user_id: str) -> dict | None:
     }
 
 
-async def _goal_progress_triggers(user_id: str) -> list[dict]:
-    """Fire goal_progress when an active goal crosses a 25/50/75% milestone."""
-    goal_repo = container.goal_repo
-    if not goal_repo:
-        return []
-
-    goals = await goal_repo.find_by_user(user_id, status="active")
-    triggers: list[dict] = []
-
-    for goal in goals:
-        target = goal.target_amount
-        current = goal.current_amount
-        if target <= 0 or current <= 0:
-            continue
-
-        progress_pct = (current / target) * 100
-
-        for milestone in (75, 50, 25):
-            if progress_pct >= milestone:
-                triggers.append(
-                    {
-                        "nudge_type": "goal_progress",
-                        "trigger_data": {
-                            "goal_name": goal.name,
-                            "target_amount": round(target),
-                            "current_amount": round(current),
-                            "progress_pct": round(progress_pct, 1),
-                            "milestone": milestone,
-                            "reason": f"goal_milestone_{milestone}pct",
-                        },
-                    }
-                )
-                break
-
     return triggers
+
+
+async def _daily_analysis_trigger(user_id: str) -> dict | None:
+    """Always fire a daily_analysis nudge summarizing and analyzing yesterday's spending."""
+    txn_repo = container.transaction_repo
+    if not txn_repo:
+        return None
+
+    profile = await get_profile(user_id)
+    start_utc, end_utc = get_date_range("yesterday", timezone=profile.timezone)
+
+    txns = await txn_repo.find_by_user(
+        user_id=user_id, start_date=start_utc, end_date=end_utc, limit=100
+    )
+
+    total_spent = sum(t.amount for t in txns if t.direction == "outflow")
+    total_income = sum(t.amount for t in txns if t.direction == "inflow")
+
+    # Get daily average for context
+    baseline = await compute_avg(
+        txn_repo, user_id, period="daily",
+        scope=SCOPE_TOTAL, timezone=profile.timezone,
+    )
+
+    # Category breakdown for yesterday
+    by_cat: dict[str, float] = defaultdict(float)
+    for t in txns:
+        if t.direction == "outflow":
+            by_cat[t.category_id or "Khác"] += t.amount
+
+    # Sort categories by amount
+    sorted_cats = sorted(by_cat.items(), key=lambda x: x[1], reverse=True)
+    top_categories = [{"category": c, "amount": round(a)} for c, a in sorted_cats[:3]]
+
+    return {
+        "nudge_type": "daily_analysis",
+        "trigger_data": {
+            "date": (datetime.now(ZoneInfo(profile.timezone)) - timedelta(days=1)).strftime("%d/%m/%Y"),
+            "total_spent": round(total_spent),
+            "total_income": round(total_income),
+            "daily_avg": round(baseline.average) if baseline.has_baseline else None,
+            "top_categories": top_categories,
+            "transaction_count": len(txns),
+            "reason": "daily_routine_analysis",
+        },
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -308,6 +320,10 @@ async def _collect_triggers(user_id: str) -> list[dict]:
 
     triggers.extend(await _subscription_triggers(user_id))
     triggers.extend(await _budget_triggers(user_id))
+
+    daily = await _daily_analysis_trigger(user_id)
+    if daily:
+        triggers.append(daily)
 
     alert = await _spending_alert_trigger(user_id)
     if alert:

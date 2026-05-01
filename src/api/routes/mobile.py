@@ -91,24 +91,29 @@ async def get_dashboard(user_id: str = Depends(get_current_user)) -> MobileDashb
 async def list_transactions(
     user_id: str = Depends(get_current_user),
     period: str = Query("this_month"),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
     category: str | None = Query(None),
     direction: str | None = Query(None, pattern="^(inflow|outflow)$"),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
 ) -> MobileTransactionListResponse:
-    """Paginated transaction list. ``cursor`` is the ``id`` of the last item
-    on the previous page; omit for the first page."""
+    """Paginated transaction list. Supports both period labels and custom
+    ISO8601 date ranges (start_date/end_date)."""
     # Authenticated via JWT
     icons = _category_icon_map()
 
-    start_date, end_date = get_date_range(period)
-    if start_date is None:
-        raise HTTPException(status_code=400, detail=f"Unsupported period: {period}")
+    profile = await get_profile(user_id)
+    tz = profile.timezone
+
+    start_dt, end_dt = resolve_date_range(period, start_date, end_date, tz)
+    if start_dt is None:
+        raise HTTPException(status_code=400, detail=f"Invalid date range or unsupported period: {period}")
 
     txns = await container.transaction_repo.find_paged(
         user_id=user_id,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=start_dt,
+        end_date=end_dt,
         category_id=category,
         direction=direction,
         limit=limit,
@@ -117,8 +122,8 @@ async def list_transactions(
 
     total = await container.transaction_repo.count_in_period(
         user_id=user_id,
-        start_date=start_date,
-        end_date=end_date,
+        start_date=start_dt,
+        end_date=end_dt,
         category_id=category,
         direction=direction,
     )
@@ -423,17 +428,22 @@ async def delete_account(user_id: str = Depends(get_current_user)):
 async def category_spending(
     user_id: str = Depends(get_current_user),
     period: str = Query("this_month"),
+    start_date: str | None = Query(None),
+    end_date: str | None = Query(None),
 ) -> MobileCategorySpendingResponse:
-    """Category spending breakdown for a period — used for pie/bar charts."""
+    """Category spending breakdown for a period — used for pie/bar charts.
+    Supports both period labels and custom ISO8601 date ranges."""
     # Authenticated via JWT
     icons = _category_icon_map()
+    profile = await get_profile(user_id)
+    tz = profile.timezone
 
-    start_date, end_date = get_date_range(period)
-    if start_date is None:
-        raise HTTPException(status_code=400, detail=f"Unsupported period: {period}")
+    start_dt, end_dt = resolve_date_range(period, start_date, end_date, tz)
+    if start_dt is None:
+        raise HTTPException(status_code=400, detail=f"Invalid date range or unsupported period: {period}")
 
     totals = await container.transaction_repo.aggregate_by_category(
-        user_id, start_date, end_date
+        user_id, start_dt, end_dt
     )
 
     total_outflow = sum(r["total"] for r in totals) or 1
