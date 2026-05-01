@@ -93,6 +93,22 @@ class TransactionRepository:
             TransactionDocument.subscription_id == subscription_id
         ).sort("-transaction_time").limit(limit).to_list()
 
+    async def find_by_user_with_subscription(
+        self,
+        user_id: str,
+        start_date: datetime | None = None,
+        limit: int = 20,
+    ) -> list[TransactionDocument]:
+        """Fetch transactions linked to any subscription for a user."""
+        conditions = [
+            TransactionDocument.user_id == user_id,
+            TransactionDocument.subscription_id != None
+        ]
+        if start_date:
+            conditions.append(TransactionDocument.transaction_time >= start_date)
+
+        return await TransactionDocument.find(*conditions).sort("-transaction_time").limit(limit).to_list()
+
     async def find_paged(
         self,
         user_id: str,

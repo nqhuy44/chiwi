@@ -114,7 +114,19 @@ No query parameters.
     }
   ],
   "upcoming_subscriptions": [
-    { "name": "Netflix", "amount": 260000, "next_charge_date": "2026-05-15T00:00:00Z" }
+    { 
+      "name": "Netflix", 
+      "amount": 260000, 
+      "next_charge_date": "2026-05-02T00:00:00Z",
+      "due_in_days": 1 
+    }
+  ],
+  "just_paid_subscriptions": [
+    {
+      "name": "Spotify",
+      "amount": 59000,
+      "paid_at": "2026-04-30T10:15:00Z"
+    }
   ]
 }
 ```
@@ -125,8 +137,9 @@ No query parameters.
 | `periods` | Stats for `today`, `this_week`, and `this_month` |
 | `top_categories` | Up to 5 highest-spend outflow categories this month |
 | `recent_transactions` | 5 most recent transactions regardless of period |
+| `upcoming_subscriptions` | Active subscriptions due within the next 3 days |
+| `just_paid_subscriptions` | Subscriptions confirmed/paid within the last 3 days |
 | `budget_alerts` | Budgets where `percent_used ≥ 80` |
-| `upcoming_subscriptions` | Subscriptions due within the next 7 days |
 
 ---
 

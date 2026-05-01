@@ -8,7 +8,7 @@ Invalidated by any transaction write/delete/correction in the orchestrator.
 
 import asyncio
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from src.db.models.transaction import TransactionDocument
 from src.db.models.budget import BudgetDocument
@@ -101,6 +101,7 @@ class DashboardService:
             recent_txns,
             budgets,
             upcoming_subs,
+            just_paid_txns,
         ) = await asyncio.gather(
             self._transaction_repo.find_by_user(user_id, today_start, today_end, limit=200),
             self._transaction_repo.find_by_user(user_id, yesterday_start, yesterday_end, limit=200),
@@ -111,7 +112,10 @@ class DashboardService:
             self._transaction_repo.aggregate_by_category(user_id, month_start, month_end),
             self._transaction_repo.find_by_user(user_id, limit=5),
             self._budget_repo.find_by_user(user_id),
-            self._subscription_repo.find_upcoming(user_id, within_hours=168),
+            self._subscription_repo.find_upcoming(user_id, within_hours=72),
+            self._transaction_repo.find_by_user_with_subscription(
+                user_id, start_date=datetime.now(UTC) - timedelta(days=3), limit=10
+            ),
         )
 
         top_categories = [
@@ -142,12 +146,25 @@ class DashboardService:
                 continue
             if ncd.tzinfo is None:
                 ncd = ncd.replace(tzinfo=UTC)
+            
+            # Filter strictly to 3 days as per user request
+            if ncd > now_utc + timedelta(days=3):
+                continue
+
             due_in = max(0, (ncd - now_utc).days)
             upcoming.append({
                 "name": sub.name,
                 "amount": sub.amount,
                 "next_charge_date": ncd.isoformat(),
                 "due_in_days": due_in,
+            })
+
+        just_paid = []
+        for txn in just_paid_txns:
+            just_paid.append({
+                "name": txn.merchant_name or "Subscription",
+                "amount": txn.amount,
+                "paid_at": txn.transaction_time.isoformat(),
             })
 
         return {
@@ -165,6 +182,7 @@ class DashboardService:
             "recent_transactions": [_fmt_txn(t, icons) for t in recent_txns],
             "budget_alerts": budget_alerts,
             "upcoming_subscriptions": upcoming,
+            "just_paid_subscriptions": just_paid,
         }
 
     async def _build_budget_alerts(

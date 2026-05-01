@@ -178,7 +178,14 @@ class MobileBudgetAlert(BaseModel):
 class MobileUpcomingSubscription(BaseModel):
     name: str
     amount: float
+    next_charge_date: datetime
     due_in_days: int
+
+
+class MobileJustPaidSubscription(BaseModel):
+    name: str
+    amount: float
+    paid_at: datetime
 
 
 class MobileDashboardResponse(BaseModel):
@@ -189,6 +196,7 @@ class MobileDashboardResponse(BaseModel):
     recent_transactions: list[MobileTransactionItem]
     budget_alerts: list[MobileBudgetAlert]
     upcoming_subscriptions: list[MobileUpcomingSubscription]
+    just_paid_subscriptions: list[MobileJustPaidSubscription]
 
 
 class MobileTransactionListResponse(BaseModel):
