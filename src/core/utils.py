@@ -58,6 +58,17 @@ def get_date_range(
         _, end = _local_day_bounds(end_of_last_week, tz)
         return start, end
 
+    if period == "last_week_same_period":
+        # Start of last week (Monday)
+        monday_this_week = today - timedelta(days=today.weekday())
+        monday_last_week = monday_this_week - timedelta(days=7)
+        # End day is "today - 7 days"
+        same_day_last_week = today - timedelta(days=7)
+        
+        start, _ = _local_day_bounds(monday_last_week, tz)
+        _, end = _local_day_bounds(same_day_last_week, tz)
+        return start, end
+
     if period == "last_month":
         first_of_this_month = today.replace(day=1)
         end_of_last_month = first_of_this_month - timedelta(days=1)
@@ -181,7 +192,7 @@ def get_comparison_ranges(
         comparison = get_date_range(compare_period, timezone)
     else:
         mapping = {
-            "this_week": "last_week",
+            "this_week": "last_week_same_period",
             "this_month": "last_month_same_period",
             "today": "yesterday",
         }

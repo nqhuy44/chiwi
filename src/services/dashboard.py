@@ -27,15 +27,9 @@ def _category_icon_map() -> dict[str, str]:
     return {c.name: c.icon_emoji for c in load_categories()}
 
 
-def _period_stats(txns: list[TransactionDocument]) -> dict:
-    inflow = sum(t.amount for t in txns if t.direction == "inflow")
+def _period_expense(txns: list[TransactionDocument]) -> float:
     outflow = sum(t.amount for t in txns if t.direction == "outflow")
-    return {
-        "inflow": round(inflow),
-        "outflow": round(outflow),
-        "net": round(inflow - outflow),
-        "tx_count": len(txns),
-    }
+    return round(outflow)
 
 
 def _fmt_txn(doc: TransactionDocument, icons: dict[str, str]) -> dict:
@@ -90,13 +84,17 @@ class DashboardService:
         tz = profile.timezone
 
         today_start, today_end = get_date_range("today", tz)
+        yesterday_start, yesterday_end = get_date_range("yesterday", tz)
         week_start, week_end = get_date_range("this_week", tz)
+        last_week_comp_start, last_week_comp_end = get_date_range("last_week_same_period", tz)
         month_start, month_end = get_date_range("this_month", tz)
         last_month_comp_start, last_month_comp_end = get_date_range("last_month_same_period", tz)
 
         (
             today_txns,
+            yesterday_txns,
             week_txns,
+            last_week_comp_txns,
             month_txns,
             last_month_comp_txns,
             category_totals,
@@ -105,7 +103,9 @@ class DashboardService:
             upcoming_subs,
         ) = await asyncio.gather(
             self._transaction_repo.find_by_user(user_id, today_start, today_end, limit=200),
+            self._transaction_repo.find_by_user(user_id, yesterday_start, yesterday_end, limit=200),
             self._transaction_repo.find_by_user(user_id, week_start, week_end, limit=500),
+            self._transaction_repo.find_by_user(user_id, last_week_comp_start, last_week_comp_end, limit=500),
             self._transaction_repo.find_by_user(user_id, month_start, month_end, limit=1000),
             self._transaction_repo.find_by_user(user_id, last_month_comp_start, last_month_comp_end, limit=1000),
             self._transaction_repo.aggregate_by_category(user_id, month_start, month_end),
@@ -114,17 +114,12 @@ class DashboardService:
             self._subscription_repo.find_upcoming(user_id, within_hours=168),
         )
 
-        total_month_outflow = sum(
-            r["total"] for r in category_totals if r["total"] > 0
-        ) or 1  # avoid division by zero
-
         top_categories = [
             {
                 "name": r["category_id"],
                 "icon": icons.get(r["category_id"], "❓"),
                 "amount": r["total"],
                 "tx_count": r["tx_count"],
-                "percent": round(r["total"] / total_month_outflow * 100, 1),
             }
             for r in category_totals[:5]
         ]
@@ -158,10 +153,12 @@ class DashboardService:
             "computed_at": now_utc.isoformat(),
             "is_cached": False,
             "periods": {
-                "today": _period_stats(today_txns),
-                "this_week": _period_stats(week_txns),
-                "this_month": _period_stats(month_txns),
-                "last_month_same_period": _period_stats(last_month_comp_txns),
+                "today": _period_expense(today_txns),
+                "yesterday": _period_expense(yesterday_txns),
+                "this_week": _period_expense(week_txns),
+                "last_week_same_period": _period_expense(last_week_comp_txns),
+                "this_month": _period_expense(month_txns),
+                "last_month_same_period": _period_expense(last_month_comp_txns),
             },
             "top_categories": top_categories,
             "recent_transactions": [_fmt_txn(t, icons) for t in recent_txns],

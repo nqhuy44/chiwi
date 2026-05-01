@@ -79,34 +79,16 @@ No query parameters.
   "computed_at": "2026-04-29T03:00:00Z",
   "is_cached": true,
   "periods": {
-    "today": {
-      "inflow": 0,
-      "outflow": 85000,
-      "net": -85000,
-      "tx_count": 2
-    },
-    "this_week": {
-      "inflow": 500000,
-      "outflow": 430000,
-      "net": 70000,
-      "tx_count": 11
-    },
-    "this_month": {
-      "inflow": 15000000,
-      "outflow": 4320000,
-      "net": 10680000,
-      "tx_count": 47
-    },
-    "last_month_same_period": {
-      "inflow": 12000000,
-      "outflow": 3800000,
-      "net": 8200000,
-      "tx_count": 41
-    }
+    "today": 150000,
+    "yesterday": 120000,
+    "this_week": 1200000,
+    "last_week_same_period": 1100000,
+    "this_month": 8000000,
+    "last_month_same_period": 7500000
   },
   "top_categories": [
-    { "name": "Ăn uống", "icon": "🍔", "amount": 1800000, "tx_count": 21, "percent": 41.7 },
-    { "name": "Di chuyển", "icon": "🚗", "amount": 920000, "tx_count": 14, "percent": 21.3 }
+    { "name": "Ăn uống", "icon": "🍔", "amount": 1800000, "tx_count": 21 },
+    { "name": "Di chuyển", "icon": "🚗", "amount": 920000, "tx_count": 14 }
   ],
   "recent_transactions": [
     {
@@ -132,7 +114,7 @@ No query parameters.
     }
   ],
   "upcoming_subscriptions": [
-    { "name": "Netflix", "amount": 260000, "due_in_days": 3 }
+    { "name": "Netflix", "amount": 260000, "next_charge_date": "2026-05-15T00:00:00Z" }
   ]
 }
 ```
