@@ -146,6 +146,7 @@ class DashboardService:
             upcoming.append({
                 "name": sub.name,
                 "amount": sub.amount,
+                "next_charge_date": ncd.isoformat(),
                 "due_in_days": due_in,
             })
 
