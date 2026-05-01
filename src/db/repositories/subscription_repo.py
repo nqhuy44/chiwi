@@ -11,23 +11,21 @@ from src.db.models.subscription import SubscriptionDocument
 
 logger = logging.getLogger(__name__)
 
-# Day-boundary arithmetic must happen in local time so "end of month" anchors
-# (e.g. anchor_day=31) resolve correctly regardless of UTC offset.
-_LOCAL_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
+_FALLBACK_TZ = "Asia/Ho_Chi_Minh"
 
 
-def _advance_date(current: datetime, period: str, anchor_day: int | None) -> datetime:
+def _advance_date(current: datetime, period: str, anchor_day: int | None, timezone: str = _FALLBACK_TZ) -> datetime:
     """Return the next charge date, preserving the anchor day-of-month for monthly/yearly.
 
-    Arithmetic is performed in Asia/Ho_Chi_Minh time so that an anchor_day of 31
-    always lands on the last day of the target month in local time, not UTC.
+    Arithmetic is performed in the caller-supplied timezone (defaults to Asia/Ho_Chi_Minh)
+    so that anchor_day=31 always lands on the last day of the target month in local time.
     """
     if period == "weekly":
         return current + timedelta(days=7)
 
-    # Normalise to local time for calendar arithmetic
+    local_tz = ZoneInfo(timezone)
     aware = current if current.tzinfo else current.replace(tzinfo=UTC)
-    local = aware.astimezone(_LOCAL_TZ)
+    local = aware.astimezone(local_tz)
 
     if period == "yearly":
         candidate = local + relativedelta(years=1)
@@ -41,7 +39,6 @@ def _advance_date(current: datetime, period: str, anchor_day: int | None) -> dat
         last = calendar.monthrange(candidate.year, candidate.month)[1]
         candidate = candidate.replace(day=min(effective, last))
 
-    # Return in same tz-awareness as input
     result = candidate.astimezone(UTC)
     return result if current.tzinfo else result.replace(tzinfo=None)
 
@@ -86,17 +83,19 @@ class SubscriptionRepository:
             SubscriptionDocument.next_charge_date <= cutoff
         ).to_list()
 
-    async def mark_charged(self, sub_id: str, user_id: str, charged_at: datetime) -> None:
-        """Advance next_charge_date by one period and record last_charged_at."""
+    async def mark_charged(self, sub_id: str, user_id: str, charged_at: datetime, user_timezone: str = _FALLBACK_TZ) -> None:
+        """Advance next_charge_date by one period and record last_charged_at.
+
+        Advances from the actual charge date so early/late payments anchor the next
+        cycle to the real charge, not the old scheduled date.
+        e.g. charged Apr 30 (anchor_day=31) → next = May 31, not Jun 30.
+        """
         sub = await self.find_by_id(sub_id)
         if not sub or sub.user_id != user_id:
             return
-        
-        # Advance from the actual charge date so that early/late payments
-        # anchor the next cycle to the real charge, not the old scheduled date.
-        # e.g. charged Apr 30 (anchor_day=31) → next = May 31, not Jun 30.
-        next_date = _advance_date(charged_at, sub.period, sub.anchor_day)
-        
+
+        next_date = _advance_date(charged_at, sub.period, sub.anchor_day, timezone=user_timezone)
+
         await sub.set({
             SubscriptionDocument.last_charged_at: charged_at,
             SubscriptionDocument.next_charge_date: next_date

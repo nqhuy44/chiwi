@@ -338,17 +338,19 @@ class Orchestrator:
                     "amount": intent_result.payload.get("subscription_amount"),
                     "period": intent_result.payload.get("subscription_period", "monthly"),
                     "next_charge_date": intent_result.payload.get("subscription_next_date"),
+                    "user_timezone": user_tz,
                 }
             )
 
         if intent_result.intent == "list_subscriptions":
-            return await self._handle_list_subscriptions({"user_id": user_id})
+            return await self._handle_list_subscriptions({"user_id": user_id, "user_timezone": user_tz})
 
         if intent_result.intent == "query_subscription":
             return await self._handle_query_subscription(
                 {
                     "user_id": user_id,
                     "merchant_name": intent_result.payload.get("subscription_merchant"),
+                    "user_timezone": user_tz,
                 }
             )
 
@@ -357,6 +359,8 @@ class Orchestrator:
                 {
                     "user_id": user_id,
                     "merchant_name": intent_result.payload.get("subscription_merchant"),
+                    "subscription_paid_date": intent_result.payload.get("subscription_paid_date"),
+                    "user_timezone": user_tz,
                 }
             )
 
@@ -365,6 +369,7 @@ class Orchestrator:
                 {
                     "user_id": user_id,
                     "merchant_name": intent_result.payload.get("subscription_merchant"),
+                    "user_timezone": user_tz,
                 }
             )
 
@@ -376,6 +381,7 @@ class Orchestrator:
                     "new_amount": intent_result.payload.get("subscription_new_amount"),
                     "new_period": intent_result.payload.get("subscription_new_period"),
                     "new_next_date": intent_result.payload.get("subscription_new_date"),
+                    "user_timezone": user_tz,
                 }
             )
 
@@ -1230,7 +1236,8 @@ class Orchestrator:
             }
 
         from src.core.config import settings as _settings
-        local_tz = ZoneInfo(_settings.business_timezone)
+        _tz_name = payload.get("user_timezone") or _settings.business_timezone
+        local_tz = ZoneInfo(_tz_name)
         now_local = datetime.now(UTC).astimezone(local_tz)
         period_label = {"monthly": "tháng", "weekly": "tuần", "yearly": "năm"}
         period_str = period_label.get(sub.period, "tháng")
@@ -1312,23 +1319,26 @@ class Orchestrator:
 
         sub_id = str(sub.id)
 
+        from src.db.repositories.subscription_repo import _advance_date
+        from zoneinfo import ZoneInfo as _ZoneInfo
+        from src.core.config import settings as _settings
+        _tz_name = payload.get("user_timezone") or _settings.business_timezone
+        _user_tz = _ZoneInfo(_tz_name)
+
         paid_date_raw = payload.get("subscription_paid_date")
         charged_at = datetime.now(UTC)
         if paid_date_raw:
             try:
                 parsed = datetime.fromisoformat(paid_date_raw)
-                charged_at = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+                # Gemini returns dates in the user's local time (no tz suffix) — treat as user midnight
+                charged_at = parsed.replace(tzinfo=_user_tz).astimezone(UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
             except (ValueError, TypeError):
                 pass
 
-        await self._subscription_repo.mark_charged(sub_id, user_id, charged_at)
+        await self._subscription_repo.mark_charged(sub_id, user_id, charged_at, user_timezone=_tz_name)
 
-        from src.db.repositories.subscription_repo import _advance_date
-        from zoneinfo import ZoneInfo as _ZoneInfo
-        from src.core.config import settings as _settings
-        _local_tz = _ZoneInfo(_settings.business_timezone)
-        next_date_advanced = _advance_date(charged_at, sub.period, sub.anchor_day)
-        ncd_local = next_date_advanced.astimezone(_local_tz) if next_date_advanced else None
+        next_date_advanced = _advance_date(charged_at, sub.period, sub.anchor_day, timezone=_tz_name)
+        ncd_local = next_date_advanced.astimezone(_user_tz) if next_date_advanced else None
         next_str = ncd_local.strftime("%d/%m/%Y") if ncd_local else "?"
 
         logger.info("Subscription '%s' manually marked paid by user %s", merchant_name, user_id)
