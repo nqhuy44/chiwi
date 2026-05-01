@@ -83,16 +83,33 @@ class SubscriptionRepository:
             SubscriptionDocument.next_charge_date <= cutoff
         ).to_list()
 
-    async def mark_charged(self, sub_id: str, user_id: str, charged_at: datetime, user_timezone: str = _FALLBACK_TZ) -> None:
+    async def mark_charged(self, sub_id: str, user_id: str, charged_at: datetime, user_timezone: str = _FALLBACK_TZ) -> bool:
         """Advance next_charge_date by one period and record last_charged_at.
 
-        Advances from the actual charge date so early/late payments anchor the next
-        cycle to the real charge, not the old scheduled date.
-        e.g. charged Apr 30 (anchor_day=31) → next = May 31, not Jun 30.
+        Returns False if a charge for the same period was already recorded (deduplication).
         """
         sub = await self.find_by_id(sub_id)
         if not sub or sub.user_id != user_id:
-            return
+            return False
+
+        if sub.last_charged_at:
+            from zoneinfo import ZoneInfo
+            tz = ZoneInfo(user_timezone)
+            l1 = sub.last_charged_at.astimezone(tz)
+            l2 = charged_at.astimezone(tz)
+            is_dup = False
+            if sub.period == "monthly":
+                is_dup = (l1.year == l2.year and l1.month == l2.month)
+            elif sub.period == "weekly":
+                y1, w1, _ = l1.isocalendar()
+                y2, w2, _ = l2.isocalendar()
+                is_dup = (y1 == y2 and w1 == w2)
+            elif sub.period == "yearly":
+                is_dup = (l1.year == l2.year)
+
+            if is_dup:
+                logger.info("Subscription %s already charged for this period (%s), skipping duplicate.", sub_id, sub.period)
+                return False
 
         next_date = _advance_date(charged_at, sub.period, sub.anchor_day, timezone=user_timezone)
 
@@ -101,6 +118,7 @@ class SubscriptionRepository:
             SubscriptionDocument.next_charge_date: next_date
         })
         logger.info("Subscription %s marked charged; next=%s", sub_id, next_date)
+        return True
 
     async def deactivate(
         self,

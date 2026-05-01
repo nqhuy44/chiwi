@@ -8,6 +8,8 @@ import logging
 from datetime import UTC, datetime
 from typing import Literal
 
+from src.core.config import settings as _settings
+
 from src.agents.analytics import AnalyticsAgent
 from src.agents.behavioral import BehavioralAgent
 from src.agents.conversational import ConversationalAgent
@@ -1321,7 +1323,6 @@ class Orchestrator:
 
         from src.db.repositories.subscription_repo import _advance_date
         from zoneinfo import ZoneInfo as _ZoneInfo
-        from src.core.config import settings as _settings
         _tz_name = payload.get("user_timezone") or _settings.business_timezone
         _user_tz = _ZoneInfo(_tz_name)
 
@@ -1335,13 +1336,55 @@ class Orchestrator:
             except (ValueError, TypeError):
                 pass
 
-        await self._subscription_repo.mark_charged(sub_id, user_id, charged_at, user_timezone=_tz_name)
+        # mark_charged now returns False if it's a duplicate period
+        success = await self._subscription_repo.mark_charged(sub_id, user_id, charged_at, user_timezone=_tz_name)
+
+        if not success:
+            logger.info("Duplicate payment confirmation for subscription '%s' (user %s) ignored.", merchant_name, user_id)
+            return {
+                "status": "success",
+                "response_text": (
+                    f"Kỳ này của <b>{sub.name}</b> đã được ghi nhận rồi ạ! "
+                    f"Bạn không cần lo bị tính trùng đâu nhé. ✨"
+                ),
+            }
 
         next_date_advanced = _advance_date(charged_at, sub.period, sub.anchor_day, timezone=_tz_name)
         ncd_local = next_date_advanced.astimezone(_user_tz) if next_date_advanced else None
         next_str = ncd_local.strftime("%d/%m/%Y") if ncd_local else "?"
 
-        logger.info("Subscription '%s' manually marked paid by user %s", merchant_name, user_id)
+        # Create a transaction record to account for this expense
+        parsed = ParsedTransaction(
+            is_transaction=True,
+            amount=sub.amount,
+            currency=sub.currency,
+            direction="outflow",
+            merchant_name=sub.merchant_name,
+            transaction_time=charged_at,
+            raw_text=payload.get("message", f"Thanh toán {sub.name}"),
+            confidence="high",
+        )
+        tags_result = await self._tagging.enrich(transaction=parsed, user_id=user_id)
+
+        txn_doc = TransactionDocument(
+            user_id=user_id,
+            source="chat",
+            amount=sub.amount,
+            currency=sub.currency,
+            direction="outflow",
+            raw_text=payload.get("message", f"Thanh toán {sub.name}"),
+            merchant_name=sub.merchant_name,
+            category_id=tags_result.get("category_name"),
+            tags=tags_result.get("tags", []),
+            transaction_time=charged_at,
+            agent_confidence="high",
+            subscription_id=sub_id,
+            ai_metadata={"tagging_result": tags_result},
+        )
+        await self._transaction_repo.insert(txn_doc)
+        await self._redis.invalidate_dashboard_cache(user_id)
+
+        logger.info("Subscription '%s' manually marked paid by user %s (transaction logged)", merchant_name, user_id)
         return {
             "status": "success",
             "response_text": (
@@ -1483,12 +1526,19 @@ class Orchestrator:
         sub = await self._subscription_repo.find_by_merchant(user_id, merchant_name)
         if sub:
             sub_id = str(sub.id)
-            await self._subscription_repo.mark_charged(sub_id, user_id, charged_at)
+            # Use profile timezone for deduplication logic in mark_charged
+            profile = await get_profile(user_id)
+            user_tz = profile.timezone or _settings.business_timezone
+            
+            success = await self._subscription_repo.mark_charged(sub_id, user_id, charged_at, user_timezone=user_tz)
+            
             if transaction_id:
                 await self._transaction_repo.set_subscription_id(transaction_id, sub_id)
-            logger.info(
-                "Subscription '%s' marked charged for user %s", merchant_name, user_id
-            )
+            
+            if success:
+                logger.info("Subscription '%s' marked charged for user %s", merchant_name, user_id)
+            else:
+                logger.info("Subscription '%s' already charged for this period for user %s; transaction linked but cycle not advanced.", merchant_name, user_id)
             return
 
         # Check for unregistered recurring pattern
