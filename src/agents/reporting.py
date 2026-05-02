@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Reporting Agent (The Strategist)
 
@@ -11,7 +12,7 @@ import logging
 from src.agents.prompts import load_prompt
 from src.api.middleware.pii_mask import mask_pii
 from src.core.config import settings
-from src.core.schemas import ReportRequest
+from src.core.schemas import ReportRequest, UserProfile
 from src.core.toon import to_toon
 from src.services.gemini import GeminiService
 
@@ -34,7 +35,7 @@ class ReportingAgent:
         profile: UserProfile | None = None,
     ) -> dict:
         """Generate a financial report for the given period."""
-        from src.core.profiles import build_personalized_prompt, UserProfile
+        from src.core.profiles import build_personalized_prompt
         
         logger.info(
             "Generating %s report for user_id=%s, period=%s with %d transactions",

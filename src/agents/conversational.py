@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Conversational Agent (The Interface)
 
@@ -16,6 +17,7 @@ from pydantic import BaseModel, Field, ValidationError
 from src.agents.prompts import load_prompt
 from src.api.middleware.pii_mask import mask_pii
 from src.core.config import settings
+from src.core.schemas import UserProfile
 from src.services.gemini import GeminiService
 
 logger = logging.getLogger(__name__)

@@ -1,3 +1,4 @@
+from __future__ import annotations
 """
 Analytics Agent (The Analyst)
 
@@ -12,7 +13,7 @@ from collections import defaultdict
 from src.agents.prompts import load_prompt
 from src.api.middleware.pii_mask import mask_pii
 from src.core.config import settings
-from src.core.schemas import AnalysisRequest
+from src.core.schemas import AnalysisRequest, UserProfile
 from src.core.toon import to_toon
 from src.services.gemini import GeminiService
 
@@ -36,7 +37,7 @@ class AnalyticsAgent:
         profile: UserProfile | None = None,
     ) -> dict:
         """Run the requested analysis and return a narrative result."""
-        from src.core.profiles import build_personalized_prompt, UserProfile
+        from src.core.profiles import build_personalized_prompt
         
         logger.info(
             "Running %s analysis for user_id=%s, period=%s",
