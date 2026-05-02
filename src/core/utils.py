@@ -125,7 +125,7 @@ def parse_custom_range(
                 dt = datetime.fromisoformat(s)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=tz)
-            return dt.astimezone(UTC).replace(tzinfo=None)
+            return dt.astimezone(UTC)
         except (ValueError, TypeError):
             return None
 
@@ -171,8 +171,8 @@ def get_sliding_window(
     
     # Convert to UTC and strip tzinfo for DB compatibility
     return (
-        start_local.astimezone(UTC).replace(tzinfo=None),
-        end_local.astimezone(UTC).replace(tzinfo=None)
+        start_local.astimezone(UTC),
+        end_local.astimezone(UTC)
     )
 
 
