@@ -601,10 +601,11 @@ async def get_user_profile(user_id: str = Depends(get_current_user)) -> UserProf
 
 @router.patch("/profile", response_model=UserProfile)
 async def patch_user_profile(
-    updates: dict,
+    updates: UserProfile,
     user_id: str = Depends(get_current_user)
 ) -> UserProfile:
     """Partially update personalization profile fields."""
+    logger.info("PATCH /profile hit for user %s with updates: %s", user_id, updates)
     from src.db.models.user import UserProfileDocument
     
     existing = await container.user_repo.get_profile(user_id)
@@ -613,28 +614,31 @@ async def patch_user_profile(
         existing = UserProfileDocument(user_id=user_id)
         await existing.insert()
     
-    # Filter valid fields from updates
-    allowed_fields = UserProfile.model_fields.keys()
-    filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields and k != "user_id"}
+    # Get only the fields provided in the request
+    provided_data = updates.model_dump(exclude_unset=True)
     
     user_updates = {}
-    if "email" in filtered_updates:
-        new_email = filtered_updates.pop("email")
+    if "email" in provided_data:
+        new_email = provided_data.pop("email")
+        # Treat empty string or "null" as None
+        if new_email is not None and (not new_email.strip() or new_email.lower() == "null"):
+            new_email = None
+            
         if new_email:
             existing_user = await container.user_repo.find_by_email(new_email)
             if existing_user and existing_user.user_id != user_id:
-                from fastapi import HTTPException
                 raise HTTPException(status_code=400, detail="Email already in use")
         user_updates["email"] = new_email
         
-    if "username" in filtered_updates:
-        filtered_updates.pop("username")  # Disallow changing username via profile patch
+    if "username" in provided_data:
+        provided_data.pop("username")  # Disallow changing username via profile patch
 
     if user_updates:
         await container.user_repo.update_user(user_id, user_updates)
     
-    if filtered_updates:
-        await existing.update({"$set": filtered_updates})
+    if provided_data:
+        provided_data.pop("user_id", None)
+        await existing.update({"$set": provided_data})
         # Invalidate dashboard cache
         await container.redis.invalidate_dashboard_cache(user_id)
     
