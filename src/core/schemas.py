@@ -64,20 +64,21 @@ class EnrichedTransaction(BaseModel):
 
 
 class UserProfile(BaseModel):
-    """Personalization profile stored in MongoDB."""
+    """Personalization profile for a user, stored in MongoDB."""
 
+    display_name: str = ""
     occupation: str = ""
     hobbies: list[str] = Field(default_factory=list)
     interests: list[str] = Field(default_factory=list)
     communication_tone: Literal["friendly", "playful", "formal", "concise"] = "friendly"
+    assistant_personality: Literal["encouraging", "objective", "strict"] = "encouraging"
     nudge_frequency: Literal["off", "daily", "weekly"] = "daily"
     language: str = "vi"
     # IANA timezone for this user. All data is stored UTC; this is used
     # for day-boundary math (reports, budgets) and for formatting dates
     # in Gemini-generated narratives. Overrides settings.business_timezone.
     timezone: str = "Asia/Ho_Chi_Minh"
-    # Required for the worker to deliver scheduled nudges. Stored in the
-    # profile file rather than the DB so the user can edit it directly.
+    # Required for the worker to deliver scheduled nudges.
     chat_id: str = ""
     extras: dict = Field(default_factory=dict)
 

@@ -220,13 +220,13 @@ class Orchestrator:
             if not audio_bytes:
                 return {"status": "error", "response_text": "Không nhận được file âm thanh."}
             intent_result = await self._conversational.process_voice(
-                audio_bytes, mime_type, chat_id, user_timezone=user_tz
+                audio_bytes, mime_type, chat_id, user_timezone=user_tz, profile=profile
             )
         else:
             if not raw_text:
                 return {"status": "empty_message"}
             intent_result = await self._conversational.process_message(
-                message=raw_text, chat_id=chat_id, user_timezone=user_tz
+                message=raw_text, chat_id=chat_id, user_timezone=user_tz, profile=profile
             )
 
         if intent_result.intent == "request_report":
@@ -537,7 +537,7 @@ class Orchestrator:
         )
 
         result = await self._reporting.generate(
-            request, transactions, user_timezone=user_tz
+            request, transactions, user_timezone=user_tz, profile=profile
         )
         return {"status": result["status"], "response_text": result["report_text"]}
 
@@ -630,7 +630,7 @@ class Orchestrator:
         )
 
         result = await self._analytics.analyze(
-            request, current_txns, comparison_txns, user_timezone=user_tz
+            request, current_txns, comparison_txns, user_timezone=user_tz, profile=profile
         )
         return {
             "status": result["status"],

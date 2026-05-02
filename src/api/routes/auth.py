@@ -16,47 +16,56 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
 
 
+import uuid
+from src.db.models.user import UserDocument, UserProfileDocument
+
 @router.post("/register", response_model=TokenResponse)
 async def register(body: RegisterRequest):
     """Create a new user identity and default profile."""
     user_repo = container.user_repo
     
-    # Check if exists
-    existing = await user_repo.find_by_id(body.username)
+    # Check if username exists
+    existing = await user_repo.find_by_username(body.username)
     if existing:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered"
         )
     
+    # Generate unique internal ID
+    user_id = str(uuid.uuid4())
+    
     # Create User
     hashed_pwd = get_password_hash(body.password)
     user_doc = UserDocument(
-        user_id=body.username,  # Use username as id for mobile-first simplicity
+        user_id=user_id,
         username=body.username,
         hashed_password=hashed_pwd,
-        full_name=body.full_name
+        # email=body.email  # If added later
     )
     await user_repo.create_user(user_doc)
     
     # Create Default Profile
+    # Use full_name if provided, else username as initial display_name
+    display_name = body.full_name or body.username
     profile_doc = UserProfileDocument(
-        user_id=body.username,
+        user_id=user_id,
+        display_name=display_name,
         timezone="Asia/Ho_Chi_Minh",
         language="vi"
     )
-    await user_repo.update_profile(body.username, profile_doc)
+    await user_repo.update_profile(user_id, profile_doc)
     
-    logger.info("New user registered: %s", body.username)
+    logger.info("New user registered: %s (id=%s)", body.username, user_id)
     
-    # Issue Tokens
-    access_token = create_access_token(data={"sub": body.username})
-    refresh_token = create_refresh_token(data={"sub": body.username})
+    # Issue Tokens - use user_id (UUID) as the 'sub'
+    access_token = create_access_token(data={"sub": user_id})
+    refresh_token = create_refresh_token(data={"sub": user_id})
     
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,
-        user_id=body.username
+        user_id=user_id
     )
 
 
@@ -64,7 +73,8 @@ async def register(body: RegisterRequest):
 async def login(body: LoginRequest):
     """Authenticate and return JWT tokens."""
     user_repo = container.user_repo
-    user = await user_repo.find_by_id(body.username)
+    # Find by username
+    user = await user_repo.find_by_username(body.username)
     
     if not user or not verify_password(body.password, user.hashed_password):
         raise HTTPException(
@@ -77,10 +87,7 @@ async def login(body: LoginRequest):
     access_token = create_access_token(data={"sub": user_id})
     refresh_token = create_refresh_token(data={"sub": user_id})
     
-    # Optionally store refresh token hash in DB for invalidation
-    # await user_repo.update_user(user_id, {"refresh_token_hash": ...})
-    
-    logger.info("User logged in: %s", user_id)
+    logger.info("User logged in: %s (id=%s)", body.username, user_id)
     return TokenResponse(
         access_token=access_token,
         refresh_token=refresh_token,

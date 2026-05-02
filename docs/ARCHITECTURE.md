@@ -80,11 +80,11 @@ Three input channels:
 
 ### 2. API Gateway (FastAPI)
 - **Authentication**: All access is gated on `UserDocument.is_active`.
-    - **Mobile REST** (`/api/mobile/*`, `/api/auth/*`): JWT Bearer token. The `get_current_user` dependency decodes the token, looks up the user, and rejects disabled accounts.
-    - **Telegram webhook**: `chat_id` resolved to a `UserDocument` via DB lookup; inactive accounts are silently dropped.
-    - **Android notification webhook** (`POST /api/webhook/notification`): `X-User-Id` header resolved via DB lookup with the same active check.
-    - To disable a user: set `UserDocument.is_active = False` — no config change or redeploy needed.
-- **Phase D (Complete)**: Data Portability & Privacy. Implements manual export (CSV/JSON), manual report/analysis triggers, and full account deletion (GDPR compliance).
+    - **Mobile REST** (`/api/mobile/*`, `/api/auth/*`): JWT Bearer token containing the internal UUID (`user_id`).
+    - **Telegram webhook**: `telegram_id` resolved to a `UserDocument` via DB lookup.
+    - **Android notification webhook**: `X-User-Id` header resolved via DB lookup.
+- **Identity Model**: Each user has one stable internal UUID. Multiple auth methods (Username/Password, Telegram, SSO) link back to this single UUID.
+- **Phase D (Complete)**: Data Portability & Privacy. Implements manual export (CSV/JSON), manual report/analysis triggers, and full account deletion (`DELETE /api/mobile/user`).
 - **PII Masking**: Strips sensitive identifiers before forwarding to AI agents.
 - **Routing**: Dispatches incoming events to the Agent Orchestrator.
 - **Optionality**: Backend is fully functional even if Telegram is disabled (`TELEGRAM_BOT_TOKEN` not provided).
@@ -97,7 +97,7 @@ The central brain that handles routing:
 4. Handles delivery channels (skips Telegram send if disabled, always ensures persistence for mobile feed).
 
 ### 4. Agent Swarm
-Six specialized agents, each with a distinct system prompt and toolset. See [AGENTS.md](./AGENTS.md) for full documentation.
+Six specialized agents. Each interaction is wrapped in a **Personalization Engine** (`src/core/profiles.py`) that dynamically injects the user's chosen `display_name`, `assistant_personality` (Strict/Encouraging/Objective), and `communication_tone` into the system prompt. See [AGENTS.md](./AGENTS.md) for full documentation.
 
 ### 5. Data Layer
 - **MongoDB**: Primary persistent storage for transactions, user identities, personalization profiles, category mappings, and agent-generated metadata. Managed via **Beanie ODM** for type-safe document modeling and validation.
@@ -166,7 +166,7 @@ chiwi/
 │   │   ├── orchestrator.py
 │   │   ├── config.py
 │   │   ├── schemas.py
-│   │   ├── profiles.py     # User profile loader (config/user_profiles.json)
+│   │   ├── profiles.py     # Personalization engine (Persona Injection)
 │   │   ├── categories.py   # Category loader (config/categories.json)
 │   │   ├── toon.py         # Token-optimised context encoder for LLM payloads
 │   │   ├── utils.py        # Timezone-aware date-range helpers
@@ -188,9 +188,7 @@ chiwi/
 │   │   └── dashboard.py  # DashboardService: Redis-cached aggregation for /api/mobile/dashboard
 │   ├── main.py           # FastAPI entrypoint (Beanie initialization)
 │   └── worker.py         # Scheduled cron worker
-├── config/
-│   ├── categories.json   # Spending categories (edit to add/rename)
-│   └── user_profiles.json # Per-user personalisation profiles (edit to configure)
+├── │   └── categories.json   # Spending categories (edit to add/rename)
 ├── tests/
 ├── docs/
 ├── cron/

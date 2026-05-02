@@ -92,8 +92,8 @@ All configuration via `.env` file. See `.env.example` for template.
 | Variable | Description |
 |---|---|
 | `GEMINI_API_KEY` | Google AI Studio API key |
-| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token |
-| `TELEGRAM_ALLOWED_USER_IDS` | Comma-separated list of authorized Telegram user IDs |
+| `TELEGRAM_BOT_TOKEN` | Telegram Bot API token (system remains functional if empty) |
+| `DATABASE_AUTH_ENABLED` | Set to true to use DB-based user authorization (Multi-tenant) |
 | `MONGODB_URI` | MongoDB connection string |
 | `REDIS_URL` | Redis connection string |
 | `LOG_LEVEL` | Application log level (DEBUG, INFO, WARN, ERROR) |

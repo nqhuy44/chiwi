@@ -648,3 +648,50 @@ The response is returned immediately (the AI processing happens in the backgroun
 
 - `GET /dashboard` is cached in Redis per user for **5 minutes**. `is_cached: true` in the response indicates a cache hit. The cache is proactively invalidated on every transaction write, delete, or correction — so the dashboard is always fresh after any data change, not just after the TTL expires.
 - All other endpoints query MongoDB directly on every request. For list endpoints with large datasets, use the `limit` and `cursor` params to keep response sizes manageable.
+
+---
+
+### Auth & Profile
+
+#### `POST /api/mobile/logout`
+Logs out the current user and invalidates the session.
+
+**Response `200`**
+```json
+{
+  "status": "success",
+  "message": "Logged out successfully"
+}
+```
+
+#### `GET /api/mobile/profile`
+Retrieves the user's personalization settings.
+
+**Response `200`**
+```json
+{
+  "occupation": "Software Engineer",
+  "hobbies": ["Coding", "Gaming"],
+  "interests": ["Finance", "AI"],
+  "communication_tone": "friendly",
+  "assistant_personality": "encouraging",
+  "nudge_frequency": "daily",
+  "language": "vi",
+  "timezone": "Asia/Ho_Chi_Minh",
+  "chat_id": "12345678"
+}
+```
+
+#### `PATCH /api/mobile/profile`
+Partially updates profile fields.
+
+**Request Body**
+Any fields from the profile response can be sent.
+```json
+{
+  "assistant_personality": "strict",
+  "occupation": "Freelancer"
+}
+```
+
+**Response `200`** (Updated profile object)

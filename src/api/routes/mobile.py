@@ -599,22 +599,47 @@ async def get_user_profile(user_id: str = Depends(get_current_user)) -> UserProf
     return await get_profile(user_id)
 
 
-@router.put("/profile", response_model=UserProfile)
-async def update_user_profile(
-    body: UserProfile,
+@router.patch("/profile", response_model=UserProfile)
+async def patch_user_profile(
+    updates: dict,
     user_id: str = Depends(get_current_user)
 ) -> UserProfile:
-    """Update personalization profile fields."""
+    """Partially update personalization profile fields."""
     from src.db.models.user import UserProfileDocument
     
-    # Ensure user_id matches
-    body_dict = body.model_dump()
-    body_dict["user_id"] = user_id
+    existing = await container.user_repo.get_profile(user_id)
+    if not existing:
+        # Create default if missing
+        existing = UserProfileDocument(user_id=user_id)
+        await existing.insert()
     
-    profile_doc = UserProfileDocument(**body_dict)
-    await container.user_repo.update_profile(user_id, profile_doc)
+    # Filter valid fields from updates
+    allowed_fields = UserProfile.model_fields.keys()
+    filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields and k != "user_id"}
     
-    # Invalidate dashboard cache as tone/language might affect it
-    await container.redis.invalidate_dashboard_cache(user_id)
+    if filtered_updates:
+        await existing.update({"$set": filtered_updates})
+        # Invalidate dashboard cache
+        await container.redis.invalidate_dashboard_cache(user_id)
     
     return await get_profile(user_id)
+
+
+@router.post("/logout")
+async def logout(user_id: str = Depends(get_current_user)):
+    """Log out the current user by clearing their refresh token hash."""
+    await container.user_repo.update_user(user_id, {"refresh_token_hash": None})
+    return {"status": "success", "message": "Logged out successfully"}
+
+
+@router.delete("/user")
+async def delete_user_account(user_id: str = Depends(get_current_user)):
+    """Permanently delete user account and all related data (GDPR compliant)."""
+    success = await container.user_repo.delete_user_data(user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="User not found")
+    
+    # Invalidate caches
+    await container.redis.invalidate_dashboard_cache(user_id)
+    
+    return {"status": "success", "message": "All user data has been permanently deleted"}

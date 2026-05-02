@@ -66,8 +66,11 @@ class BehavioralAgent:
                 return self._blocked(blocked_reason)
 
         # Generate message via Gemini
-        prompt = self._build_user_msg(request, profile)
-        result = await self._gemini.call_flash(SYSTEM_PROMPT, prompt)
+        from src.core.profiles import build_personalized_prompt
+        prompt = build_personalized_prompt(template=SYSTEM_PROMPT, profile=profile)
+        
+        user_msg_content = self._build_user_msg(request, profile)
+        result = await self._gemini.call_flash(prompt, user_msg_content)
         
         message = (result.get("message") or "").strip()
         should_send = result.get("should_send", True)

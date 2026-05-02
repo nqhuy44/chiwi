@@ -1,77 +1,73 @@
-"""Load user personalization profiles from a JSON config file.
+"""User personalization profiles management.
 
-Profiles live outside the codebase (default `config/user_profiles.json`)
-so the user can edit occupation, hobbies, and tone without redeploying.
-The path can be overridden via the `USER_PROFILES_FILE` env var.
+Profiles are stored in the `user_profiles` collection in MongoDB.
+Each user has a single profile document.
 """
 
 from __future__ import annotations
-import json
 import logging
-from functools import lru_cache
-from pathlib import Path
-
-from src.core.config import settings
 from src.core.schemas import UserProfile
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parents[2]
-_DEFAULT_PATH = _PROJECT_ROOT / "config" / "user_profiles.json"
-_DEFAULT_KEY = "default"
-
-
-def _resolve_path() -> Path:
-    if settings.user_profiles_file:
-        path = Path(settings.user_profiles_file)
-        if not path.is_absolute():
-            path = _PROJECT_ROOT / path
-        return path
-    return _DEFAULT_PATH
-
-
-@lru_cache(maxsize=1)
-def _load_raw_json() -> dict[str, dict]:
-    path = _resolve_path()
-    if not path.exists():
-        logger.warning("User profiles file not found at %s", path)
-        return {}
-    raw = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(raw, dict):
-        logger.error("User profiles file must be a JSON object: %s", path)
-        return {}
-    return {k: v for k, v in raw.items() if not k.startswith("_")}
-
-
-def _get_json_profile(user_id: str) -> UserProfile:
-    """Fallback: read from config/user_profiles.json during migration."""
-    raw = _load_raw_json()
-    entry = raw.get(user_id) or raw.get(_DEFAULT_KEY) or {}
-    try:
-        return UserProfile(**entry)
-    except Exception:
-        logger.warning("Invalid JSON profile entry for user_id=%s", user_id)
-        return UserProfile()
-
 
 async def get_profile(user_id: str) -> UserProfile:
-    """Return the profile for ``user_id`` or the default profile.
+    """Return the profile for ``user_id`` or a default profile.
 
-    DB-first logic: check MongoDB via user_repo, fallback to JSON if missing.
+    DB-only logic: check MongoDB via user_repo.
     """
-    # Lazy import to avoid circular dependency with dependencies.py -> dashboard.py -> profiles.py
+    # Lazy import to avoid circular dependency
     from src.core.dependencies import container
     try:
         db_profile = await container.user_repo.get_profile(user_id)
         if db_profile:
-            # db_profile is now a UserProfileDocument (Beanie/Pydantic v2)
+            # db_profile is a UserProfileDocument (Beanie/Pydantic v2)
             return UserProfile.model_validate(db_profile.model_dump())
     except Exception:
         logger.exception("Error fetching profile from DB for user_id=%s", user_id)
 
-    return _get_json_profile(user_id)
+    # Return default profile if not found in DB
+    return UserProfile()
 
 
-def reload_json() -> None:
-    """Drop the cached JSON profiles. Call after editing the file at runtime."""
-    _load_raw_json.cache_clear()
+def build_personalized_prompt(template: str, profile: UserProfile, current_timestamp: str | None = None) -> str:
+    """Inject personality, tone, and user context into a prompt template."""
+    prompt = template
+    
+    if current_timestamp:
+        prompt = prompt.replace("{{CURRENT_TIMESTAMP}}", current_timestamp)
+    
+    # Personality Mapping
+    pers_map = {
+        "encouraging": "Thái độ của bạn: Luôn tích cực, khích lệ người dùng. Hãy khen ngợi khi họ tiết kiệm và động viên nhẹ nhàng khi họ chi tiêu nhiều.",
+        "objective": "Thái độ của bạn: Khách quan, trung lập. Chỉ tập trung vào số liệu và sự thật, không đưa ra cảm xúc cá nhân.",
+        "strict": "Thái độ của bạn: Nghiêm khắc và kỷ luật. Hãy nhắc nhở người dùng về trách nhiệm tài chính, phê bình nếu họ chi tiêu lãng phí hoặc vượt ngân sách."
+    }
+    
+    # Tone Mapping
+    tone_map = {
+        "friendly": "Phong cách trò chuyện: Thân thiện, gần gũi như một người bạn, xưng hô phù hợp (ví dụ: mình - bạn, em - anh/chị).",
+        "playful": "Phong cách trò chuyện: Vui vẻ, hóm hỉnh, thỉnh thoảng có thể dùng icon và pha trò nhẹ nhàng.",
+        "formal": "Phong cách trò chuyện: Lịch sự, trang trọng, xưng hô chuẩn mực.",
+        "concise": "Phong cách trò chuyện: Ngắn gọn, súc tích, đi thẳng vào vấn đề, tránh rườm rà."
+    }
+    
+    p_instr = pers_map.get(profile.assistant_personality, pers_map["encouraging"])
+    t_instr = tone_map.get(profile.communication_tone, tone_map["friendly"])
+    
+    # User Context (Name, occupation, hobbies)
+    user_context = []
+    if profile.display_name:
+        user_context.append(f"Tên của người dùng là: {profile.display_name}. Hãy thỉnh thoảng gọi tên họ một cách tự nhiên.")
+    if profile.occupation:
+        user_context.append(f"Nghề nghiệp: {profile.occupation}.")
+    if profile.hobbies:
+        user_context.append(f"Sở thích: {', '.join(profile.hobbies)}.")
+        
+    if user_context:
+        p_instr += " " + " ".join(user_context)
+        
+    prompt = prompt.replace("{{PERSONALITY_INSTRUCTION}}", p_instr)
+    prompt = prompt.replace("{{TONE_INSTRUCTION}}", t_instr)
+    
+    return prompt

@@ -286,9 +286,9 @@ async def _handle_command(
             return
         
         user_id = user.user_id
-        # Update user with chat_id
+        # Update user with telegram_id
         await container.user_repo.update_user(user_id, {
-            "telegram_chat_id": str(chat_id),
+            "telegram_id": str(chat_id),
             "link_code": None,
             "link_code_expires": None
         })
@@ -513,7 +513,7 @@ async def telegram_webhook(
         if legacy_user:
             real_user_id = chat_id
             # Auto-link for future lookups
-            await container.user_repo.update_user(chat_id, {"telegram_chat_id": chat_id})
+            await container.user_repo.update_user(chat_id, {"telegram_id": chat_id})
         else:
             logger.warning("Unauthorized telegram user: chat_id=%s", chat_id)
             await container.telegram.send_message(chat_id, "Chào bạn! Hiện tại mình chỉ hỗ trợ người dùng đã đăng ký. Vui lòng tải ứng dụng Android và liên kết tài khoản nhé!")

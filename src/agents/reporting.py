@@ -31,8 +31,11 @@ class ReportingAgent:
         request: ReportRequest,
         transactions: list[dict],
         user_timezone: str = "Asia/Ho_Chi_Minh",
+        profile: UserProfile | None = None,
     ) -> dict:
         """Generate a financial report for the given period."""
+        from src.core.profiles import build_personalized_prompt, UserProfile
+        
         logger.info(
             "Generating %s report for user_id=%s, period=%s with %d transactions",
             request.report_type,
@@ -66,14 +69,15 @@ class ReportingAgent:
                 for t in transactions
             ]
 
-        raw_msg = (
-            to_toon(payload)
-            + "\n\nHãy viết một báo cáo ngắn gọn, thân thiện bằng tiếng Việt."
-            " Nếu không có giao dịch, hãy động viên nhẹ nhàng."
-        )
+        raw_msg = to_toon(payload)
         user_msg = mask_pii(raw_msg) if settings.pii_mask_enabled else raw_msg
 
-        result = await self._gemini.call_flash(SYSTEM_PROMPT, user_msg)
+        prompt = build_personalized_prompt(
+            template=SYSTEM_PROMPT,
+            profile=profile or UserProfile()
+        )
+
+        result = await self._gemini.call_flash(prompt, user_msg)
         report_text = result.get("report_text", "Không thể tạo báo cáo lúc này.")
 
         return {

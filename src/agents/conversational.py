@@ -63,13 +63,12 @@ class ConversationalAgent:
         chat_id: str,
         session_context: dict | None = None,
         user_timezone: str | None = None,
+        profile: UserProfile | None = None,
     ) -> IntentResult:
         """Process a text message and determine intent."""
         logger.info("Processing message from chat_id=%s", chat_id)
 
-        tz = ZoneInfo(user_timezone or settings.business_timezone)
-        now_iso = datetime.now(tz).isoformat()
-        prompt = SYSTEM_PROMPT_TEMPLATE.replace("{{CURRENT_TIMESTAMP}}", now_iso)
+        prompt = self._build_prompt(user_timezone, profile)
 
         masked = mask_pii(message) if settings.pii_mask_enabled else message
         user_msg = f"<user_message>\n{masked}\n</user_message>"
@@ -100,6 +99,7 @@ class ConversationalAgent:
         audio_mime_type: str,
         chat_id: str,
         user_timezone: str | None = None,
+        profile: UserProfile | None = None,
     ) -> IntentResult:
         """Process a voice message via Gemini native audio STT + intent extraction."""
         logger.info("Processing voice from chat_id=%s", chat_id)
@@ -110,9 +110,7 @@ class ConversationalAgent:
                 response_text="Xin lỗi, mình chưa nghe rõ. Bạn thử nhắn chữ nhé?",
             )
 
-        tz = ZoneInfo(user_timezone or settings.business_timezone)
-        now_iso = datetime.now(tz).isoformat()
-        prompt = SYSTEM_PROMPT_TEMPLATE.replace("{{CURRENT_TIMESTAMP}}", now_iso)
+        prompt = self._build_prompt(user_timezone, profile)
 
         result = await self._gemini.call_flash_with_audio(prompt, audio_bytes, audio_mime_type)
 
@@ -131,3 +129,17 @@ class ConversationalAgent:
                 intent="general_chat",
                 response_text="Xin lỗi, mình không hiểu ý bạn. Bạn thử nhắn chữ nhé?",
             )
+
+    def _build_prompt(self, user_timezone: str | None, profile: UserProfile | None) -> str:
+        """Construct the system prompt with timezone, personality, and tone."""
+        from src.core.profiles import build_personalized_prompt
+        from zoneinfo import ZoneInfo
+        
+        tz = ZoneInfo(user_timezone or settings.business_timezone)
+        now_iso = datetime.now(tz).isoformat()
+        
+        return build_personalized_prompt(
+            template=SYSTEM_PROMPT_TEMPLATE,
+            profile=profile or UserProfile(),
+            current_timestamp=now_iso
+        )

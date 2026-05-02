@@ -18,13 +18,14 @@ erDiagram
 
     USER {
         PydanticObjectId id PK
-        string user_id UK "platform-agnostic ID"
-        string username UK
+        string user_id UK "Permanent internal UUID"
+        string username UK "Login username"
+        string email UK
         string hashed_password
         string refresh_token_hash
-        string full_name
-        string telegram_chat_id
-        string link_code "6-digit Telegram linking code"
+        string telegram_id UK "Linked Telegram ID"
+        string google_id UK
+        string apple_id UK
         bool is_active "false = account disabled"
         datetime created_at
         datetime updated_at
@@ -32,12 +33,13 @@ erDiagram
 
     USER_PROFILE {
         ObjectId _id PK
-        ObjectId user_id FK
+        string user_id FK
+        string display_name
+        string timezone
         string occupation
         list hobbies
-        dict financial_goals
-        float monthly_income
-        string currency
+        string assistant_personality
+        string communication_tone
     }
 
     TRANSACTION {
@@ -102,15 +104,15 @@ Primary user record.
 | Field | Type | Description |
 |---|---|---|
 | `id` | PydanticObjectId | Primary key (MongoDB `_id`) |
-| `user_id` | string | **Unique**. Primary identity (username used as ID at registration) |
-| `username` | string | **Unique**. Login name |
-| `hashed_password` | string | Bcrypt hash for mobile login |
+| `user_id` | string | **Unique**. Permanent internal UUID (stable reference) |
+| `username` | string | **Unique**. Local login name |
+| `email` | string | **Unique**. User email for SSO/Recovery |
+| `hashed_password` | string | Bcrypt hash for local login |
 | `refresh_token_hash` | string | Hash of current refresh token |
-| `full_name` | string | Display name |
-| `telegram_chat_id` | string | Linked Telegram chat ID (set via `/link` flow) |
-| `link_code` | string | 6-digit one-time code for Telegram account linking |
-| `link_code_expires` | datetime | Expiry of the linking code (10-minute window) |
-| `is_active` | bool | **Account status. `false` = disabled.** All entry points reject inactive accounts. |
+| `telegram_id` | string | Linked Telegram ID (set via `/link` flow) |
+| `google_id` | string | Linked Google SSO ID |
+| `apple_id` | string | Linked Apple SSO ID |
+| `is_active` | bool | **Account status. `false` = disabled.** |
 | `created_at` | datetime | Account creation timestamp (UTC) |
 | `updated_at` | datetime | Last update timestamp (UTC) |
 
@@ -124,12 +126,14 @@ Personalization preferences — editable via the Android Settings screen (`PUT /
 
 | Field | Type | Description |
 |---|---|---|
-| `user_id` | string | FK → `users.user_id` |
-| `timezone` | string | IANA timezone (e.g. `"Asia/Ho_Chi_Minh"`). Drives day-boundary math and LLM date formatting. Storage is always UTC. |
+| `user_id` | string | FK → `users.user_id` (UUID) |
+| `display_name` | string | Personal name Mai uses to greet the user |
+| `timezone` | string | IANA timezone (default: `"Asia/Ho_Chi_Minh"`) |
 | `occupation` | string | e.g., `"Senior DevOps Engineer"` |
 | `hobbies` | list | e.g., `["film_photography", "coffee"]` |
-| `interests` | list | For analogy generation, e.g., `["Kodak Portra 400"]` |
+| `interests` | list | General interest context for AI analogies |
 | `communication_tone` | string | `friendly` / `playful` / `formal` / `concise` |
+| `assistant_personality` | string | `encouraging` / `objective` / `strict` |
 | `nudge_frequency` | string | `daily` / `weekly` / `off` |
 | `language` | string | Default `"vi"` |
 | `extras` | dict | Free-form personalisation hints |

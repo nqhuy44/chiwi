@@ -39,9 +39,17 @@ class UserRepository:
         users = await UserDocument.find(UserDocument.is_active == True).to_list()
         return [u.user_id for u in users]
 
+    async def find_by_username(self, username: str) -> UserDocument | None:
+        """Find user by their unique login username."""
+        return await UserDocument.find_one(UserDocument.username == username)
+
+    async def find_by_telegram_id(self, telegram_id: str) -> UserDocument | None:
+        """Find user by their linked Telegram ID."""
+        return await UserDocument.find_one(UserDocument.telegram_id == str(telegram_id))
+
     async def find_by_chat_id(self, chat_id: str) -> UserDocument | None:
-        """Find user by their linked Telegram chat ID."""
-        return await UserDocument.find_one(UserDocument.telegram_chat_id == str(chat_id))
+        """Find user by their linked Telegram chat ID (Alias for find_by_telegram_id)."""
+        return await self.find_by_telegram_id(chat_id)
 
     async def find_by_link_code(self, code: str) -> UserDocument | None:
         """Find user by an active linking code."""
