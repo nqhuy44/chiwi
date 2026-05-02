@@ -109,10 +109,16 @@ async def list_transactions(
     tz = profile.timezone
 
     # Resolve date range
-    if period or start_date or end_date:
-        start_dt, end_dt = resolve_date_range(period or "this_month", start_date, end_date, tz)
+    if start_date or end_date:
+        # 1. Custom ISO dates always take top priority
+        start_dt, end_dt = resolve_date_range(None, start_date, end_date, tz)
+    elif period and period != "this_month":
+        # 2. Specific period labels (today, last_week, etc.) take priority
+        start_dt, end_dt = resolve_date_range(period, None, None, tz)
     else:
-        # Default to sliding window (last 7 days by default)
+        # 3. Default case OR explicit "this_month": Use sliding window (e.g. last 7 days)
+        # This ensures that at the beginning of a month, we still see recent transactions
+        # from the previous month.
         start_dt, end_dt = get_sliding_window(offset_days, window_size, tz)
 
     if start_dt is None:

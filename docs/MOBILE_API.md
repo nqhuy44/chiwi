@@ -155,15 +155,15 @@ Paginated transaction list with optional filters.
 
 | Query param | Type | Default | Description |
 |---|---|---|---|
-| `period` | string | `null` | See period table above. If omitted, uses sliding window logic. |
-| `start_date` | string | — | ISO8601 date, e.g. `2026-04-01` (overrides period/window) |
-| `end_date` | string | — | ISO8601 date, e.g. `2026-04-10` (overrides period/window) |
+| `period` | string | `null` | See period table above. Note: `this_month` is treated as a default and will be overridden by sliding window logic if provided. |
+| `start_date` | string | — | ISO8601 date, e.g. `2026-04-01` (overrides everything) |
+| `end_date` | string | — | ISO8601 date, e.g. `2026-04-10` (overrides everything) |
 | `category` | string | — | Filter by category name, e.g. `Ăn uống` |
 | `direction` | string | — | `inflow` or `outflow` |
 | `limit` | int | `20` | Page size, 1–100 |
-| `cursor` | string | — | `id` of the last item from the previous page (omit for first page) |
-| `offset_days` | int | `0` | Number of days to look back from now. Used for sliding window pagination. |
-| `window_size` | int | `7` | Size of the time block in days. Default is 7. |
+| `cursor` | string | — | `id` of the last item from the previous page |
+| `offset_days` | int | `0` | Days to look back. Priority 2 (after custom dates). |
+| `window_size` | int | `7` | Time block size in days. |
 
 #### Response `200`
 
