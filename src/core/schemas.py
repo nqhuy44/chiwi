@@ -67,6 +67,8 @@ class UserProfile(BaseModel):
     """Personalization profile for a user, stored in MongoDB."""
 
     display_name: str = ""
+    username: str | None = None
+    email: str | None = None
     occupation: str = ""
     hobbies: list[str] = Field(default_factory=list)
     interests: list[str] = Field(default_factory=list)
@@ -305,6 +307,16 @@ class MobileCategorySpendingResponse(BaseModel):
     breakdown: list[MobileCategoryItem]
 
 # --- Auth ---
+
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    code: str
+    new_password: str
 
 
 class RegisterRequest(BaseModel):

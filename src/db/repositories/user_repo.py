@@ -63,6 +63,34 @@ class UserRepository:
             UserDocument.link_code_expires > datetime.now(UTC)
         )
 
+    async def set_reset_code(self, email: str, code: str, expires_at: datetime) -> bool:
+        """Store the password reset code for a user."""
+        user = await self.find_by_email(email)
+        if not user:
+            return False
+        await user.update({"$set": {"reset_code": code, "reset_code_expires": expires_at}})
+        return True
+
+    async def verify_reset_code(self, email: str, code: str) -> UserDocument | None:
+        """Verify if a reset code is valid and not expired."""
+        from datetime import UTC, datetime
+        return await UserDocument.find_one(
+            UserDocument.email == email,
+            UserDocument.reset_code == code,
+            UserDocument.reset_code_expires > datetime.now(UTC)
+        )
+
+    async def update_password_by_email(self, email: str, hashed_password: str) -> bool:
+        """Update user password and clear reset code fields."""
+        user = await self.find_by_email(email)
+        if not user:
+            return False
+        await user.update({
+            "$set": {"hashed_password": hashed_password},
+            "$unset": {"reset_code": "", "reset_code_expires": ""}
+        })
+        return True
+
     async def delete_user_data(self, user_id: str) -> bool:
         """Wipe all user-related data (Privacy/GDPR requirement)."""
         from src.db.models.budget import BudgetDocument

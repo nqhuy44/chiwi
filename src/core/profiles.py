@@ -19,10 +19,15 @@ async def get_profile(user_id: str) -> UserProfile:
     # Lazy import to avoid circular dependency
     from src.core.dependencies import container
     try:
+        user_doc = await container.user_repo.find_by_id(user_id)
         db_profile = await container.user_repo.get_profile(user_id)
-        if db_profile:
-            # db_profile is a UserProfileDocument (Beanie/Pydantic v2)
-            return UserProfile.model_validate(db_profile.model_dump())
+        
+        profile_data = db_profile.model_dump() if db_profile else {}
+        if user_doc:
+            profile_data["username"] = user_doc.username
+            profile_data["email"] = user_doc.email
+            
+        return UserProfile.model_validate(profile_data)
     except Exception:
         logger.exception("Error fetching profile from DB for user_id=%s", user_id)
 

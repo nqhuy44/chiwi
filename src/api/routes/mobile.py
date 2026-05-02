@@ -617,6 +617,22 @@ async def patch_user_profile(
     allowed_fields = UserProfile.model_fields.keys()
     filtered_updates = {k: v for k, v in updates.items() if k in allowed_fields and k != "user_id"}
     
+    user_updates = {}
+    if "email" in filtered_updates:
+        new_email = filtered_updates.pop("email")
+        if new_email:
+            existing_user = await container.user_repo.find_by_email(new_email)
+            if existing_user and existing_user.user_id != user_id:
+                from fastapi import HTTPException
+                raise HTTPException(status_code=400, detail="Email already in use")
+        user_updates["email"] = new_email
+        
+    if "username" in filtered_updates:
+        filtered_updates.pop("username")  # Disallow changing username via profile patch
+
+    if user_updates:
+        await container.user_repo.update_user(user_id, user_updates)
+    
     if filtered_updates:
         await existing.update({"$set": filtered_updates})
         # Invalidate dashboard cache

@@ -16,6 +16,8 @@ class UserDocument(Document):
     username: Indexed(str, unique=True) | None = None  # For local login
     hashed_password: str | None = None
     refresh_token_hash: str | None = None
+    reset_code: str | None = None
+    reset_code_expires: datetime | None = None
     
     # External identities (for SSO readiness & Account Linking)
     telegram_id: Indexed(str, unique=True) | None = None

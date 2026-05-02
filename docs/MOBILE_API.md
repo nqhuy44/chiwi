@@ -729,3 +729,39 @@ Permanently delete user account and all related data (GDPR compliant).
   "message": "All user data has been permanently deleted"
 }
 ```
+
+#### `POST /api/auth/request-reset`
+Request a password reset code sent to the user's email.
+
+**Request Body**
+```json
+{
+  "email": "huy@example.com"
+}
+```
+
+**Response `200`**
+```json
+{
+  "message": "If that email is registered, a reset code has been sent."
+}
+```
+
+#### `POST /api/auth/confirm-reset`
+Confirm the reset code and update the password.
+
+**Request Body**
+```json
+{
+  "email": "huy@example.com",
+  "code": "123456",
+  "new_password": "new_secure_password"
+}
+```
+
+**Response `200`**
+```json
+{
+  "message": "Password has been successfully reset."
+}
+```

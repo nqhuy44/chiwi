@@ -1,5 +1,6 @@
 import logging
-from datetime import timedelta
+import random
+from datetime import timedelta, UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -8,7 +9,10 @@ from src.core.config import settings
 from src.core.dependencies import container
 from src.core.security import (create_access_token, create_refresh_token,
                                get_password_hash, verify_password)
-from src.core.schemas import RegisterRequest, LoginRequest, TokenResponse
+from src.core.schemas import (
+    RegisterRequest, LoginRequest, TokenResponse, 
+    ForgotPasswordRequest, ResetPasswordRequest
+)
 from src.db.models.user import UserDocument, UserProfileDocument
 
 logger = logging.getLogger(__name__)
@@ -130,3 +134,49 @@ async def refresh(refresh_token: str):
         )
     except Exception:
         raise HTTPException(status_code=401, detail="Could not validate refresh token")
+
+
+@router.post("/request-reset")
+async def request_password_reset(body: ForgotPasswordRequest):
+    """Generate and send a password reset code to the user's email."""
+    user_repo = container.user_repo
+    user = await user_repo.find_by_email(body.email)
+    if not user:
+        # Prevent email enumeration by always returning success
+        return {"message": "If that email is registered, a reset code has been sent."}
+    
+    # Generate 6-digit code
+    code = f"{random.randint(0, 999999):06d}"
+    expires_at = datetime.now(UTC) + timedelta(minutes=15)
+    
+    await user_repo.set_reset_code(body.email, code, expires_at)
+    
+    # Mock sending email
+    logger.info("MOCK EMAIL: Password reset code for %s is %s", body.email, code)
+    
+    return {"message": "If that email is registered, a reset code has been sent."}
+
+
+@router.post("/confirm-reset")
+async def confirm_password_reset(body: ResetPasswordRequest):
+    """Verify the reset code and update the password."""
+    user_repo = container.user_repo
+    
+    user = await user_repo.verify_reset_code(body.email, body.code)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid or expired reset code"
+        )
+    
+    hashed_password = get_password_hash(body.new_password)
+    success = await user_repo.update_password_by_email(body.email, hashed_password)
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to update password"
+        )
+        
+    logger.info("Password reset successful for user: %s", body.email)
+    return {"message": "Password has been successfully reset."}
