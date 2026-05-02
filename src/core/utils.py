@@ -133,7 +133,7 @@ def parse_custom_range(
 
 
 def resolve_date_range(
-    period: str,
+    period: str | None = None,
     start_iso: str | None = None,
     end_iso: str | None = None,
     timezone: str | None = None,
@@ -144,6 +144,10 @@ def resolve_date_range(
     """
     if start_iso or end_iso:
         return parse_custom_range(start_iso, end_iso, timezone)
+    
+    if not period:
+        return None, None
+        
     return get_date_range(period, timezone)
 
 

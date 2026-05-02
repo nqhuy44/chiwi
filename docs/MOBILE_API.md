@@ -155,15 +155,13 @@ Paginated transaction list with optional filters.
 
 | Query param | Type | Default | Description |
 |---|---|---|---|
-| `period` | string | `null` | See period table above. Note: `this_month` is treated as a default and will be overridden by sliding window logic if provided. |
-| `start_date` | string | — | ISO8601 date, e.g. `2026-04-01` (overrides everything) |
-| `end_date` | string | — | ISO8601 date, e.g. `2026-04-10` (overrides everything) |
-| `category` | string | — | Filter by category name, e.g. `Ăn uống` |
-| `direction` | string | — | `inflow` or `outflow` |
-| `limit` | int | `20` | Page size, 1–100 |
-| `cursor` | string | — | `id` of the last item from the previous page |
-| `offset_days` | int | `0` | Days to look back. Priority 2 (after custom dates). |
-| `window_size` | int | `7` | Time block size in days. |
+| `period` | string | `null` | **Primary Filter**. See period table. Defines the absolute boundaries for the list. |
+| `start_date` | string | — | ISO8601 date. Overrides `period`. Defines the absolute start boundary. |
+| `end_date` | string | — | ISO8601 date. Overrides `period`. Defines the absolute end boundary. |
+| `offset_days` | int | `0` | **Sliding Window Offset**. Days to look back from *now*. Used for batch-loading within the filter boundaries. |
+| `window_size` | int | `7` | **Sliding Window Size**. The size of the time block in days. |
+| `limit` | int | `20` | Max items per page *within* a time block. |
+| `cursor` | string | — | `id` for next page *within* the same time block. |
 
 #### Response `200`
 
@@ -177,8 +175,7 @@ Paginated transaction list with optional filters.
       "merchant": "Highlands Coffee",
       "category": "Cafe",
       "icon": "☕",
-      "note": "",
-      "timestamp": "2026-04-29T02:31:00Z",
+      "timestamp": "2026-05-01T02:31:00Z",
       "locked": false,
       "source": "android"
     }
@@ -191,27 +188,31 @@ Paginated transaction list with optional filters.
 
 | Field | Description |
 |---|---|
-| `next_cursor` | Pass as `cursor` on next request to get the next page *within the same time block*. `null` means the current time block is exhausted. |
-| `next_offset_days` | If `next_cursor` is `null`, pass this value as `offset_days` in the next request to fetch the previous time block (e.g. 7 days older). |
-| `total_in_period` | Total matching transactions in the period (ignores pagination). |
-| `source` | Where the transaction came from: `"android"` (bank notification) or `"telegram"` (chat/voice). |
-| `locked` | `true` if the transaction is system-locked and cannot be edited. |
+| `next_cursor` | Cursor for pagination *within the current time block*. |
+| `next_offset_days` | Use this as `offset_days` in the next call if `next_cursor` is null. `null` means no more blocks in the filter. |
+| `total_in_period` | Total items matching the *Filter Range* (not just the window). |
 
-#### Sliding Window Pagination Example (Lazy Load)
+#### How Pagination Works (Intersection Logic)
 
-To implement the "Load last 7 days, then next 7 days" pattern:
+The API calculates the intersection of your **Filter Range** (e.g., `this_month`) and the **Sliding Window** (e.g., `last 7 days`).
 
-1. **First Load** (Today back to 7 days ago):
-   `GET /api/mobile/transactions?limit=20&offset_days=0&window_size=7`
-   → `next_cursor: "abc", next_offset_days: 0`
+1. **Within a block**: If a 7-day block has 50 transactions and `limit=20`, use `next_cursor` to fetch all 50.
+2. **Between blocks**: When `next_cursor` is `null`, use `next_offset_days` to fetch the next 7-day block.
+3. **Boundary Check**: If the next block falls entirely outside the `period` (e.g., you are filtering `this_month` and scroll into last month), `next_offset_days` will be `null`.
 
-2. **Load More** (Still in the same 7 days):
-   `GET /api/mobile/transactions?limit=20&offset_days=0&window_size=7&cursor=abc`
-   → `next_cursor: null, next_offset_days: 7`
+#### Example: Lazy Load within "This Month" (Assume today is May 15)
 
-3. **Load Next Block** (Older 7 days):
-   `GET /api/mobile/transactions?limit=20&offset_days=7&window_size=7`
-   → `next_cursor: null, next_offset_days: 14`
+1. **Load first 7 days of May**:
+   `GET /api/mobile/transactions?period=this_month&offset_days=0&window_size=7`
+   → Returns transactions from May 8 to May 15.
+
+2. **Load next 7 days of May**:
+   `GET /api/mobile/transactions?period=this_month&offset_days=7&window_size=7`
+   → Returns transactions from May 1 to May 8.
+
+3. **Try to load more**:
+   `GET /api/mobile/transactions?period=this_month&offset_days=14&window_size=7`
+   → Returns `transactions: []` and `next_offset_days: null` because April is outside "this_month".
 
 ---
 

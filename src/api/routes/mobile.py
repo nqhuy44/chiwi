@@ -108,18 +108,29 @@ async def list_transactions(
     profile = await get_profile(user_id)
     tz = profile.timezone
 
-    # Resolve date range
-    if start_date or end_date:
-        # 1. Custom ISO dates always take top priority
-        start_dt, end_dt = resolve_date_range(None, start_date, end_date, tz)
-    elif period and period != "this_month":
-        # 2. Specific period labels (today, last_week, etc.) take priority
-        start_dt, end_dt = resolve_date_range(period, None, None, tz)
-    else:
-        # 3. Default case OR explicit "this_month": Use sliding window (e.g. last 7 days)
-        # This ensures that at the beginning of a month, we still see recent transactions
-        # from the previous month.
-        start_dt, end_dt = get_sliding_window(offset_days, window_size, tz)
+    # 1. Resolve Filter Range (The absolute boundaries)
+    # Default to "this_month" if absolutely nothing is provided, 
+    # but handle it gracefully so it can be intersected.
+    f_start, f_end = resolve_date_range(period, start_date, end_date, tz)
+
+    # 2. Resolve Sliding Window Range (The "viewing" block)
+    w_start, w_end = get_sliding_window(offset_days, window_size, tz)
+
+    # 3. Intersect Filter and Window
+    # start_dt = Max(Filter_Start, Window_Start)
+    # end_dt = Min(Filter_End, Window_End)
+    start_dt = max(f_start, w_start) if f_start else w_start
+    end_dt = min(f_end, w_end) if f_end else w_end
+
+    # Handle the case where the window moves entirely outside the filter
+    if f_start and w_end < f_start:
+        # Window is older than the filter start
+        return MobileTransactionListResponse(
+            transactions=[],
+            next_cursor=None,
+            next_offset_days=None,
+            total_in_period=0
+        )
 
     if start_dt is None:
         raise HTTPException(status_code=400, detail=f"Invalid date range or unsupported period")
