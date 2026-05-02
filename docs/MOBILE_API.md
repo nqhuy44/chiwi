@@ -695,3 +695,37 @@ Any fields from the profile response can be sent.
 ```
 
 **Response `200`** (Updated profile object)
+
+#### `POST /api/auth/register`
+Creates a new user identity and default profile.
+
+**Request Body**
+```json
+{
+  "username": "nqhuy44",
+  "password": "secure_password",
+  "full_name": "Nguyen Quy Huy",
+  "email": "huy@example.com"
+}
+```
+
+**Response `200`**
+```json
+{
+  "access_token": "...",
+  "refresh_token": "...",
+  "token_type": "bearer",
+  "user_id": "uuid-v4-string"
+}
+```
+
+#### `DELETE /api/mobile/user`
+Permanently delete user account and all related data (GDPR compliant).
+
+**Response `200`**
+```json
+{
+  "status": "success",
+  "message": "All user data has been permanently deleted"
+}
+```
