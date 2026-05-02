@@ -161,14 +161,9 @@ async def list_transactions(
         # We might have more in the same window
         next_cursor = str(txns[-1].id)
     else:
-        # Window exhausted, suggest next window if no period was fixed
-        if not (period or start_date or end_date):
-            next_cursor = None
-            next_offset_days = offset_days + window_size
-        else:
-            # For fixed periods, no next_offset
-            next_cursor = None
-            next_offset_days = None
+        # Window exhausted, suggest next window
+        next_cursor = None
+        next_offset_days = offset_days + window_size
 
     return MobileTransactionListResponse(
         transactions=[_fmt_txn(t, icons) for t in txns],
