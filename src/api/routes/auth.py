@@ -25,15 +25,28 @@ async def register(body: RegisterRequest):
     user_repo = container.user_repo
     
     # Check if username exists
-    existing = await user_repo.find_by_username(body.username)
-    if existing:
+    existing_username = await user_repo.find_by_username(body.username)
+    if existing_username:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Username already registered"
         )
     
-    # Generate unique internal ID
+    # Check if email exists
+    if body.email:
+        existing_email = await user_repo.find_by_email(body.email)
+        if existing_email:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered"
+            )
+    
+    # Generate unique internal ID (retry if somehow exists)
     user_id = str(uuid.uuid4())
+    for _ in range(3): # Safety retry
+        if not await user_repo.find_by_id(user_id):
+            break
+        user_id = str(uuid.uuid4())
     
     # Create User
     hashed_pwd = get_password_hash(body.password)
@@ -41,7 +54,7 @@ async def register(body: RegisterRequest):
         user_id=user_id,
         username=body.username,
         hashed_password=hashed_pwd,
-        # email=body.email  # If added later
+        email=body.email
     )
     await user_repo.create_user(user_doc)
     

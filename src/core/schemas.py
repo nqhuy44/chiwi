@@ -311,6 +311,7 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     full_name: str | None = None
+    email: str | None = None
 
 
 class LoginRequest(BaseModel):

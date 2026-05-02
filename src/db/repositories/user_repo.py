@@ -43,6 +43,10 @@ class UserRepository:
         """Find user by their unique login username."""
         return await UserDocument.find_one(UserDocument.username == username)
 
+    async def find_by_email(self, email: str) -> UserDocument | None:
+        """Find user by their unique email."""
+        return await UserDocument.find_one(UserDocument.email == email)
+
     async def find_by_telegram_id(self, telegram_id: str) -> UserDocument | None:
         """Find user by their linked Telegram ID."""
         return await UserDocument.find_one(UserDocument.telegram_id == str(telegram_id))
