@@ -1,5 +1,6 @@
 """User repository for MongoDB operations using Beanie ODM."""
 
+from datetime import datetime
 from src.db.models.user import UserDocument, UserProfileDocument
 
 
