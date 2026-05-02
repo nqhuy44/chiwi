@@ -155,13 +155,15 @@ Paginated transaction list with optional filters.
 
 | Query param | Type | Default | Description |
 |---|---|---|---|
-| `period` | string | `this_month` | See period table above |
-| `start_date` | string | — | ISO8601 date, e.g. `2026-04-01` (overrides period) |
-| `end_date` | string | — | ISO8601 date, e.g. `2026-04-10` (overrides period) |
+| `period` | string | `null` | See period table above. If omitted, uses sliding window logic. |
+| `start_date` | string | — | ISO8601 date, e.g. `2026-04-01` (overrides period/window) |
+| `end_date` | string | — | ISO8601 date, e.g. `2026-04-10` (overrides period/window) |
 | `category` | string | — | Filter by category name, e.g. `Ăn uống` |
 | `direction` | string | — | `inflow` or `outflow` |
 | `limit` | int | `20` | Page size, 1–100 |
 | `cursor` | string | — | `id` of the last item from the previous page (omit for first page) |
+| `offset_days` | int | `0` | Number of days to look back from now. Used for sliding window pagination. |
+| `window_size` | int | `7` | Size of the time block in days. Default is 7. |
 
 #### Response `200`
 
@@ -182,29 +184,34 @@ Paginated transaction list with optional filters.
     }
   ],
   "next_cursor": "6630e0c1b4e9f00012345670",
+  "next_offset_days": 0,
   "total_in_period": 47
 }
 ```
 
 | Field | Description |
 |---|---|
-| `next_cursor` | Pass as `cursor` on next request to get the next page. `null` means this is the last page. |
-| `total_in_period` | Total matching transactions in the period (ignores pagination). Use for "X transactions" labels. |
+| `next_cursor` | Pass as `cursor` on next request to get the next page *within the same time block*. `null` means the current time block is exhausted. |
+| `next_offset_days` | If `next_cursor` is `null`, pass this value as `offset_days` in the next request to fetch the previous time block (e.g. 7 days older). |
+| `total_in_period` | Total matching transactions in the period (ignores pagination). |
 | `source` | Where the transaction came from: `"android"` (bank notification) or `"telegram"` (chat/voice). |
 | `locked` | `true` if the transaction is system-locked and cannot be edited. |
 
-#### Pagination example
+#### Sliding Window Pagination Example (Lazy Load)
 
-```
-GET /api/mobile/transactions?period=this_month&limit=20
-→ next_cursor: "abc123"
+To implement the "Load last 7 days, then next 7 days" pattern:
 
-GET /api/mobile/transactions?period=this_month&limit=20&cursor=abc123
-→ next_cursor: "def456"
+1. **First Load** (Today back to 7 days ago):
+   `GET /api/mobile/transactions?limit=20&offset_days=0&window_size=7`
+   → `next_cursor: "abc", next_offset_days: 0`
 
-GET /api/mobile/transactions?period=this_month&limit=20&cursor=def456
-→ next_cursor: null  ← last page
-```
+2. **Load More** (Still in the same 7 days):
+   `GET /api/mobile/transactions?limit=20&offset_days=0&window_size=7&cursor=abc`
+   → `next_cursor: null, next_offset_days: 7`
+
+3. **Load Next Block** (Older 7 days):
+   `GET /api/mobile/transactions?limit=20&offset_days=7&window_size=7`
+   → `next_cursor: null, next_offset_days: 14`
 
 ---
 

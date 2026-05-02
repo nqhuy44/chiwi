@@ -202,6 +202,7 @@ class MobileDashboardResponse(BaseModel):
 class MobileTransactionListResponse(BaseModel):
     transactions: list[MobileTransactionItem]
     next_cursor: str | None
+    next_offset_days: int | None = None
     total_in_period: int
 
 

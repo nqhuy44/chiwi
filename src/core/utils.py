@@ -147,6 +147,31 @@ def resolve_date_range(
     return get_date_range(period, timezone)
 
 
+def get_sliding_window(
+    offset_days: int,
+    window_size: int,
+    timezone: str | None = None,
+) -> Tuple[datetime, datetime]:
+    """Calculate (start_utc, end_utc) for a relative time window.
+
+    Useful for infinite scroll/lazy loading in 7-day increments.
+    """
+    tz = _resolve_tz(timezone)
+    now_local = datetime.now(tz)
+    
+    # end_dt is 'now - offset_days'
+    end_local = now_local - timedelta(days=offset_days)
+    
+    # start_dt is 'end_dt - window_size'
+    start_local = end_local - timedelta(days=window_size)
+    
+    # Convert to UTC and strip tzinfo for DB compatibility
+    return (
+        start_local.astimezone(UTC).replace(tzinfo=None),
+        end_local.astimezone(UTC).replace(tzinfo=None)
+    )
+
+
 def get_budget_window(
     budget_period: str, timezone: str | None = None
 ) -> Tuple[datetime | None, datetime | None]:

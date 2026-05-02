@@ -43,7 +43,7 @@ from src.core.schemas import (
     MobileUnreadCountResponse,
     UserProfile,
 )
-from src.core.utils import get_budget_window, get_date_range
+from src.core.utils import get_budget_window, get_date_range, resolve_date_range, get_sliding_window
 from src.db.repositories.budget_repo import effective_limit
 
 logger = logging.getLogger(__name__)
@@ -90,25 +90,33 @@ async def get_dashboard(user_id: str = Depends(get_current_user)) -> MobileDashb
 @router.get("/transactions", response_model=MobileTransactionListResponse)
 async def list_transactions(
     user_id: str = Depends(get_current_user),
-    period: str = Query("this_month"),
+    period: str | None = Query(None),
     start_date: str | None = Query(None),
     end_date: str | None = Query(None),
     category: str | None = Query(None),
     direction: str | None = Query(None, pattern="^(inflow|outflow)$"),
     limit: int = Query(20, ge=1, le=100),
     cursor: str | None = Query(None),
+    offset_days: int = Query(0, ge=0),
+    window_size: int = Query(7, ge=1),
 ) -> MobileTransactionListResponse:
-    """Paginated transaction list. Supports both period labels and custom
-    ISO8601 date ranges (start_date/end_date)."""
+    """Paginated transaction list. Supports both period labels, custom
+    ISO8601 date ranges, or sliding time windows (offset_days/window_size)."""
     # Authenticated via JWT
     icons = _category_icon_map()
 
     profile = await get_profile(user_id)
     tz = profile.timezone
 
-    start_dt, end_dt = resolve_date_range(period, start_date, end_date, tz)
+    # Resolve date range
+    if period or start_date or end_date:
+        start_dt, end_dt = resolve_date_range(period or "this_month", start_date, end_date, tz)
+    else:
+        # Default to sliding window (last 7 days by default)
+        start_dt, end_dt = get_sliding_window(offset_days, window_size, tz)
+
     if start_dt is None:
-        raise HTTPException(status_code=400, detail=f"Invalid date range or unsupported period: {period}")
+        raise HTTPException(status_code=400, detail=f"Invalid date range or unsupported period")
 
     txns = await container.transaction_repo.find_paged(
         user_id=user_id,
@@ -128,11 +136,27 @@ async def list_transactions(
         direction=direction,
     )
 
-    next_cursor = str(txns[-1].id) if len(txns) == limit else None
+    # Pagination logic
+    next_cursor: str | None = None
+    next_offset_days: int | None = offset_days
+
+    if len(txns) == limit:
+        # We might have more in the same window
+        next_cursor = str(txns[-1].id)
+    else:
+        # Window exhausted, suggest next window if no period was fixed
+        if not (period or start_date or end_date):
+            next_cursor = None
+            next_offset_days = offset_days + window_size
+        else:
+            # For fixed periods, no next_offset
+            next_cursor = None
+            next_offset_days = None
 
     return MobileTransactionListResponse(
         transactions=[_fmt_txn(t, icons) for t in txns],
         next_cursor=next_cursor,
+        next_offset_days=next_offset_days,
         total_in_period=total,
     )
 
