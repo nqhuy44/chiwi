@@ -20,7 +20,19 @@ setup: install
 	@echo "Setup complete. Edit .env with your keys."
 
 run: venv
+	nohup ngrok http 8000 > /dev/null 2>&1 &
+	sleep 3
+	./scripts/webhook_local.sh
 	$(UVICORN) src.main:app --host 0.0.0.0 --reload
+
+stop:
+	./scripts/webhook_local.sh --delete
+	killall ngrok
+
+local-up:
+	docker compose -f docker-compose.dev.yaml up -d
+local-down:
+	docker compose -f docker-compose.dev.yaml down
 
 migrate: venv
 	PYTHONPATH=. $(PYTHON) scripts/migrate_to_beanie.py
@@ -30,15 +42,6 @@ seed-profiles: venv
 
 backup:
 	bash scripts/backup_db.sh
-
-ngrok:
-	ngrok http 8000
-
-webhook-set:
-	bash scripts/set_webhook.sh
-
-webhook-delete:
-	bash scripts/set_webhook.sh --delete
 
 lint: venv
 	$(VENV)/bin/black . && $(VENV)/bin/isort .

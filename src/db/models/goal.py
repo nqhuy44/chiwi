@@ -11,7 +11,8 @@ class GoalDocument(Document):
     currency: str = "VND"
     current_amount: float = 0.0
     deadline: datetime | None = None
-    category_id: str | None = None
+    category: str | None = None
+    icon: str | None = None
     status: Literal["active", "achieved", "cancelled"] = "active"
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 

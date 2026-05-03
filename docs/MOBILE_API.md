@@ -34,7 +34,7 @@ Missing or expired tokens return **401 Unauthorized**.
 
 **Amounts** — all monetary amounts are in **VND** (integers after rounding).
 
-**Direction** — `"inflow"` (money received) or `"outflow"` (money spent).
+**Direction** — `"inflow"` (money received), `"outflow"` (money spent), or `"savingflow"` (money accumulated for a goal).
 
 **Period** values accepted by endpoints that take a `period` query param:
 
@@ -162,6 +162,7 @@ Paginated transaction list with optional filters.
 | `window_size` | int | `7` | **Sliding Window Size**. The size of the time block in days. |
 | `limit` | int | `20` | Max items per page *within* a time block. |
 | `cursor` | string | — | `id` for next page *within* the same time block. |
+| `goal_id` | string | — | Filter by specific goal ID. |
 
 #### Response `200`
 
@@ -177,7 +178,8 @@ Paginated transaction list with optional filters.
       "icon": "☕",
       "timestamp": "2026-05-01T02:31:00Z",
       "locked": false,
-      "source": "android"
+      "source": "android",
+      "goal_id": "6630d002b4e9f00012340002"
     }
   ],
   "next_cursor": "6630e0c1b4e9f00012345670",
@@ -279,12 +281,15 @@ No query parameters.
     {
       "id": "6630d002b4e9f00012340002",
       "name": "Máy ảnh Fujifilm X100VI",
+      "category": "Hobbies",
+      "icon": "📸",
       "target_amount": 20000000,
       "saved_amount": 8000000,
       "percent_achieved": 40,
       "monthly_needed": 2000000,
       "deadline": "2026-10-01T00:00:00Z",
-      "on_track": true
+      "on_track": true,
+      "status": "active"
     }
   ]
 }
@@ -295,6 +300,78 @@ No query parameters.
 | `monthly_needed` | Amount to save per month to hit the goal by the deadline. `null` if no deadline is set. |
 | `on_track` | `true` if current savings pace meets the deadline target. |
 | `percent_achieved` | Capped at 100 even if `saved_amount > target_amount`. |
+| `status` | `"active"`, `"achieved"`, `"cancelled"` |
+
+---
+
+### `POST /goals`
+
+Create a new savings goal.
+
+#### Request
+
+```json
+{
+  "name": "Mua xe mới",
+  "target_amount": 50000000,
+  "deadline": "2027-01-01T00:00:00Z",
+  "category": "Tiết kiệm",
+  "icon": "🚗"
+}
+```
+
+#### Response `200`
+
+Returns the created `MobileGoalItem`.
+
+---
+
+### `PATCH /goals/{id}`
+
+Update an existing goal. Accepts any subset of fields.
+
+#### Request
+
+```json
+{
+  "target_amount": 55000000,
+  "status": "active"
+}
+```
+
+#### Response `200`
+
+Returns the updated `MobileGoalItem`.
+
+---
+
+### `DELETE /goals/{id}`
+
+Delete a goal.
+
+#### Response `200`
+
+```json
+{ "status": "ok" }
+```
+
+---
+
+### `POST /goals/{id}/accumulate`
+
+Manually record an accumulation (saving) for a specific goal. This creates a `savingflow` transaction and updates the goal progress.
+
+#### Request
+
+```json
+{
+  "amount": 500000
+}
+```
+
+#### Response `200`
+
+Returns the updated `MobileGoalItem`.
 
 ---
 
@@ -475,6 +552,7 @@ This is an **AI endpoint**: it invokes the Orchestrator pipeline (Conversational
 | User message | Intent | What happens |
 |---|---|---|
 | `"Ăn phở 60k hôm qua"` | `log_transaction` | Parses and stores a 60k outflow transaction |
+| `"Đầu tư 10tr vào cổ phiếu"` | `log_accumulation` | Adds 10M to the "cổ phiếu" goal as a `savingflow` |
 | `"Tháng này chi bao nhiêu?"` | `ask_balance` | Returns income/expense/net for the current month |
 | `"Báo cáo tuần này"` | `request_report` | Generates an AI-powered weekly spending report |
 | `"Đặt ngân sách ăn uống 3 triệu"` | `set_budget` | Creates a monthly 3M budget for food |

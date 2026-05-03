@@ -31,9 +31,12 @@ from src.core.schemas import (
     MobileChatAction,
     MobileChatRequest,
     MobileChatResponse,
+    MobileCreateGoalRequest,
     MobileDashboardResponse,
     MobileGoalItem,
     MobileGoalListResponse,
+    MobileUpdateGoalRequest,
+    MobileAccumulateGoalRequest,
     MobileNudgeItem,
     MobileNudgeListResponse,
     MobileSubscriptionItem,
@@ -74,6 +77,7 @@ def _fmt_txn(doc: TransactionDocument, icons: dict[str, str]) -> MobileTransacti
         timestamp=ts,
         locked=doc.locked,
         source=doc.source,
+        goal_id=doc.goal_id,
     )
 
 
@@ -99,6 +103,7 @@ async def list_transactions(
     cursor: str | None = Query(None),
     offset_days: int = Query(0, ge=0),
     window_size: int = Query(7, ge=1),
+    goal_id: str | None = Query(None),
 ) -> MobileTransactionListResponse:
     """Paginated transaction list. Supports both period labels, custom
     ISO8601 date ranges, or sliding time windows (offset_days/window_size)."""
@@ -143,6 +148,7 @@ async def list_transactions(
         direction=direction,
         limit=limit,
         after_id=cursor,
+        goal_id=goal_id,
     )
 
     total = await container.transaction_repo.count_in_period(
@@ -151,6 +157,7 @@ async def list_transactions(
         end_date=end_dt,
         category_id=category,
         direction=direction,
+        goal_id=goal_id,
     )
 
     # Pagination logic
@@ -228,59 +235,141 @@ async def list_budgets(user_id: str = Depends(get_current_user)) -> MobileBudget
     return MobileBudgetListResponse(budgets=items)
 
 
-@router.get("/goals", response_model=MobileGoalListResponse)
-async def list_goals(user_id: str = Depends(get_current_user)) -> MobileGoalListResponse:
-    """Active savings goals with progress."""
-    # Authenticated via JWT
-    goals = await container.goal_repo.find_by_user(user_id, status="active")
-    now_utc = datetime.now(UTC)
-    items: list[MobileGoalItem] = []
+def _fmt_goal(g, icons: dict[str, str], now_utc: datetime) -> MobileGoalItem:
+    target = g.target_amount or 1
+    saved = g.current_amount
+    pct = int((saved / target) * 100)
+    deadline = g.deadline
 
-    for g in goals:
-        target = g.target_amount or 1
-        saved = g.current_amount
-        pct = int((saved / target) * 100)
-        deadline = g.deadline
-
-        monthly_needed: float | None = None
-        on_track = False
-        if deadline:
-            if deadline.tzinfo is None:
-                deadline = deadline.replace(tzinfo=UTC)
-            months_left = max(
-                1,
-                (deadline.year - now_utc.year) * 12
-                + (deadline.month - now_utc.month),
-            )
-            remaining = max(0.0, target - saved)
-            monthly_needed = round(remaining / months_left)
+    monthly_needed: float | None = None
+    on_track = False
+    if deadline:
+        if deadline.tzinfo is None:
+            deadline = deadline.replace(tzinfo=UTC)
+        months_left = max(
+            1,
+            (deadline.year - now_utc.year) * 12
+            + (deadline.month - now_utc.month),
+        )
+        remaining = max(0.0, target - saved)
+        monthly_needed = round(remaining / months_left)
+        
+        created_at = g.created_at
+        if created_at.tzinfo is None:
+            created_at = created_at.replace(tzinfo=UTC)
             
-            created_at = g.created_at
-            if created_at.tzinfo is None:
-                created_at = created_at.replace(tzinfo=UTC)
-                
-            on_track = pct >= int(
-                (
-                    (now_utc - created_at).days
-                    / max(1, (deadline - created_at).days)
-                )
-                * 100
+        on_track = pct >= int(
+            (
+                (now_utc - created_at).days
+                / max(1, (deadline - created_at).days)
             )
-
-        items.append(
-            MobileGoalItem(
-                id=str(g.id),
-                name=g.name,
-                target_amount=round(target),
-                saved_amount=round(saved),
-                percent_achieved=min(100, pct),
-                monthly_needed=monthly_needed,
-                deadline=deadline,
-                on_track=on_track,
-            )
+            * 100
         )
 
+    return MobileGoalItem(
+        id=str(g.id),
+        name=g.name,
+        category=g.category,
+        icon=g.icon or icons.get(g.category or "", "🎯"),
+        target_amount=round(target),
+        saved_amount=round(saved),
+        percent_achieved=min(100, pct),
+        monthly_needed=monthly_needed,
+        deadline=deadline,
+        on_track=on_track,
+        status=g.status
+    )
+
+
+@router.get("/goals", response_model=MobileGoalListResponse)
+async def list_goals(user_id: str = Depends(get_current_user)) -> MobileGoalListResponse:
+    # Authenticated via JWT
+    icons = _category_icon_map()
+    goals = await container.goal_repo.find_by_user(user_id, status=None) # get all
+    now_utc = datetime.now(UTC)
+    items = [_fmt_goal(g, icons, now_utc) for g in goals]
     return MobileGoalListResponse(goals=items)
+
+
+@router.post("/goals", response_model=MobileGoalItem)
+async def create_goal(
+    body: MobileCreateGoalRequest,
+    user_id: str = Depends(get_current_user)
+) -> MobileGoalItem:
+    from src.db.models.goal import GoalDocument
+    doc = GoalDocument(
+        user_id=user_id,
+        name=body.name,
+        target_amount=body.target_amount,
+        deadline=body.deadline,
+        category=body.category,
+        icon=body.icon,
+    )
+    await container.goal_repo.insert(doc)
+    return _fmt_goal(doc, _category_icon_map(), datetime.now(UTC))
+
+
+@router.patch("/goals/{id}", response_model=MobileGoalItem)
+async def update_goal(
+    id: str,
+    body: MobileUpdateGoalRequest,
+    user_id: str = Depends(get_current_user)
+) -> MobileGoalItem:
+    updates = body.model_dump(exclude_unset=True)
+    success = await container.goal_repo.update(id, user_id, updates)
+    if not success:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    
+    goal = await container.goal_repo.find_by_id(id, user_id)
+    return _fmt_goal(goal, _category_icon_map(), datetime.now(UTC))
+
+
+@router.delete("/goals/{id}")
+async def delete_goal(
+    id: str,
+    user_id: str = Depends(get_current_user)
+):
+    success = await container.goal_repo.delete(id, user_id)
+    if not success:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    return {"status": "ok"}
+
+
+@router.post("/goals/{id}/accumulate", response_model=MobileGoalItem)
+async def accumulate_goal(
+    id: str,
+    body: MobileAccumulateGoalRequest,
+    user_id: str = Depends(get_current_user)
+) -> MobileGoalItem:
+    goal = await container.goal_repo.find_by_id(id, user_id)
+    if not goal:
+        raise HTTPException(status_code=404, detail="Goal not found")
+    
+    # Create savingflow transaction
+    from src.db.models.transaction import TransactionDocument
+    txn_doc = TransactionDocument(
+        user_id=user_id,
+        amount=body.amount,
+        currency="VND",
+        direction="savingflow",
+        merchant_name=f"Tích lũy: {goal.name}",
+        category_id="Tích lũy",
+        transaction_time=datetime.now(UTC),
+        agent_confidence="high",
+        goal_id=id,
+        source="mobile_manual",
+    )
+    await container.transaction_repo.insert(txn_doc)
+    
+    # Update goal progress
+    new_amount = goal.current_amount + body.amount
+    await container.goal_repo.update_progress(id, user_id, new_amount)
+    
+    # Invalidate dashboard cache
+    await container.redis.invalidate_dashboard_cache(user_id)
+    
+    goal.current_amount = new_amount # local update for response
+    return _fmt_goal(goal, _category_icon_map(), datetime.now(UTC))
 
 
 @router.get("/subscriptions", response_model=MobileSubscriptionListResponse)

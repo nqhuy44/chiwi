@@ -107,6 +107,7 @@ Six specialized agents. Each interaction is wrapped in a **Personalization Engin
 - **Telegram Bot** (Optional): confirming, nudging, and quick interactions via inline buttons if a token is provided.
 - **Android App**: Consumes the `/api/mobile/*` REST endpoints. Unified notification feed and pre-computed dashboard.
 - Endpoints: `/api/mobile/dashboard`, `/transactions`, `/budgets`, `/goals`, `/subscriptions`, `/nudges`, `/profile`.
+- `/api/mobile/goals/{id}/accumulate` allows explicit goal progress updates, creating isolated `savingflow` transactions that don't affect general income/expense reports.
 - `/api/mobile/subscriptions` returns `last_charged_at` alongside `next_charge_date` and `due_in_days`, enabling the Android app to derive upcoming-payment and recently-paid views client-side.
 
 ## Deployment Architecture

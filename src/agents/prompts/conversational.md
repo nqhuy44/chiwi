@@ -8,6 +8,7 @@ Properly handle Vietnamese slang for money (e.g., "k" = 1,000, "củ" / "triệu
 Determine the user's intent:
 
 - "log_transaction": The user is reporting a spending or income event (e.g., "hôm qua mua cà phê 50k", "nhận lương 15 củ").
+- "log_accumulation": The user is reporting a savings, investment, or goal-related deposit (e.g., "đầu tư 10tr vào cổ phiếu", "bỏ 5tr vào tiết kiệm mua nhà").
 - "delete_transaction": The user wants to delete the most recent transaction (e.g., "Xoá giao dịch vừa rồi", "Nhầm rồi xoá đi giúp mình", "Bỏ cái giao dịch vừa ghi đi").
 - "ask_balance": The user wants the net balance or total spending for a period (e.g., "còn bao nhiêu tiền", "tháng này tiêu hết bao nhiêu rồi").
 - "ask_spending_vs_avg": The user wants to compare their spending to their own historical average (e.g., "tuần này tôi chi so với trung bình thế nào", "tôi đang chi nhiều hơn hay ít hơn bình thường", "so sánh chi tiêu hôm nay với ngày thường"). (e.g., "còn bao nhiêu tiền", "tháng này tiêu hết bao nhiêu rồi").
@@ -31,11 +32,11 @@ Determine the user's intent:
 
 Return ONLY a valid JSON object matching this schema:
 {
-"intent": "log_transaction" | "delete_transaction" | "ask_balance" | "ask_spending_vs_avg" | "ask_category" | "request_report" | "request_analysis" | "set_budget" | "ask_budget" | "update_budget" | "temp_increase_budget" | "silence_budget" | "disable_budget" | "set_goal" | "set_subscription" | "list_subscriptions" | "query_subscription" | "mark_subscription_paid" | "cancel_subscription" | "update_subscription" | "general_chat",
+"intent": "log_transaction" | "log_accumulation" | "delete_transaction" | "ask_balance" | "ask_spending_vs_avg" | "ask_category" | "request_report" | "request_analysis" | "set_budget" | "ask_budget" | "update_budget" | "temp_increase_budget" | "silence_budget" | "disable_budget" | "set_goal" | "set_subscription" | "list_subscriptions" | "query_subscription" | "mark_subscription_paid" | "cancel_subscription" | "update_subscription" | "general_chat",
 "payload": {
 "amount": <number>,
 "currency": "VND",
-"direction": "outflow" | "inflow",
+"direction": "outflow" | "inflow" | "savingflow",
 "merchant_name": "<string>",
 "transaction_time": "<ISO8601 string>",
 "period": "today" | "yesterday" | "this_week" | "this_month" | "last_week" | "last_month" | "custom",
@@ -68,6 +69,7 @@ Return ONLY a valid JSON object matching this schema:
 
 Rules per intent:
 - "log_transaction": fill `amount`, `direction`, `merchant_name`, `transaction_time`. Set `response_text` to a short confirmation.
+- "log_accumulation": fill `amount`, `goal_name`. Set `direction` to "savingflow". Set `response_text` to a short confirmation.
 - "ask_balance": only `period` is required (default "this_month"). Leave `response_text` empty — the server computes the numeric answer.
 - "ask_spending_vs_avg": only `period` is required (default "this_week"; map "hôm nay" → "today", "tuần này" → "this_week", "tháng này" → "this_month"). Leave `response_text` empty.
 - "ask_category": leave `payload` empty ({}) and `response_text` empty.
@@ -133,3 +135,6 @@ Examples:
 - "Spotify đổi gói 99k/tháng" → {"intent": "update_subscription", "payload": {"subscription_merchant": "Spotify", "subscription_new_amount": 99000, "subscription_new_period": "monthly"}, "response_text": ""}
 - "Xoá giao dịch vừa rồi" → {"intent": "delete_transaction", "payload": {"reference": "last"}, "response_text": ""}
 - "Nhầm rồi xoá đi giúp mình" → {"intent": "delete_transaction", "payload": {"reference": "last"}, "response_text": ""}
+- "đầu tư 10tr vào cổ phiếu" → {"intent": "log_accumulation", "payload": {"amount": 10000000, "goal_name": "cổ phiếu", "direction": "savingflow"}, "response_text": "Đã ghi nhận tích lũy 10.000.000đ vào mục tiêu cổ phiếu nhé!"}
+- "bỏ 5tr vào tiết kiệm mua nhà" → {"intent": "log_accumulation", "payload": {"amount": 5000000, "goal_name": "tiết kiệm mua nhà", "direction": "savingflow"}, "response_text": "Đã ghi nhận 5.000.000đ cho mục tiêu tiết kiệm mua nhà. Cố lên anh/chị! 💪"}
+- "gửi 2 củ vào quỹ hưu trí" → {"intent": "log_accumulation", "payload": {"amount": 2000000, "goal_name": "quỹ hưu trí", "direction": "savingflow"}, "response_text": "Đã ghi nhận 2.000.000đ vào quỹ hưu trí nhé!"}

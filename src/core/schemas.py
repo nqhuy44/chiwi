@@ -34,7 +34,7 @@ class ParsedTransaction(BaseModel):
     is_transaction: bool
     amount: float | None = None
     currency: str = "VND"
-    direction: Literal["inflow", "outflow"] | None = None
+    direction: Literal["inflow", "outflow", "savingflow"] | None = None
     merchant_name: str | None = None
     transaction_time: datetime | None = None
     bank_name: str | None = None
@@ -160,7 +160,7 @@ class MobileCategoryItem(BaseModel):
 class MobileTransactionItem(BaseModel):
     id: str
     amount: float
-    direction: Literal["inflow", "outflow"]
+    direction: Literal["inflow", "outflow", "savingflow"]
     merchant: str | None
     category: str | None
     icon: str
@@ -168,6 +168,7 @@ class MobileTransactionItem(BaseModel):
     timestamp: datetime
     locked: bool
     source: str
+    goal_id: str | None = None
 
 
 class MobileBudgetAlert(BaseModel):
@@ -230,16 +231,40 @@ class MobileBudgetListResponse(BaseModel):
 class MobileGoalItem(BaseModel):
     id: str
     name: str
+    category: str | None
+    icon: str | None
     target_amount: float
     saved_amount: float
     percent_achieved: int
     monthly_needed: float | None
     deadline: datetime | None
     on_track: bool
+    status: str = "active"
 
 
 class MobileGoalListResponse(BaseModel):
     goals: list[MobileGoalItem]
+
+
+class MobileCreateGoalRequest(BaseModel):
+    name: str
+    target_amount: float
+    deadline: datetime | None = None
+    category: str | None = None
+    icon: str | None = None
+
+
+class MobileUpdateGoalRequest(BaseModel):
+    name: str | None = None
+    target_amount: float | None = None
+    deadline: datetime | None = None
+    category: str | None = None
+    icon: str | None = None
+    status: Literal["active", "achieved", "cancelled"] | None = None
+
+
+class MobileAccumulateGoalRequest(BaseModel):
+    amount: float
 
 
 class MobileSubscriptionItem(BaseModel):

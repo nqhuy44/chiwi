@@ -175,9 +175,6 @@ class Orchestrator:
         logger.info("Transaction stored from Android notification: %s", txn_id)
         await self._redis.invalidate_dashboard_cache(user_id)
 
-        if txn_doc.direction == "inflow":
-            await self._update_goal_progress(user_id, txn_doc.amount)
-
         if chat_id and parsed.merchant_name:
             await self._check_subscription_match(
                 user_id, parsed.merchant_name, parsed.amount or 0.0,
@@ -394,6 +391,16 @@ class Orchestrator:
                 "reference": intent_result.payload.get("reference", "last"),
             })
 
+        if intent_result.intent == "log_accumulation":
+            return await self._handle_log_accumulation({
+                "user_id": user_id,
+                "chat_id": chat_id,
+                "amount": intent_result.payload.get("amount"),
+                "goal_name": intent_result.payload.get("goal_name"),
+                "message": raw_text,
+                "intent_response": intent_result.response_text,
+            })
+
         if intent_result.intent != "log_transaction":
             return {
                 "status": "chat_processed",
@@ -453,9 +460,6 @@ class Orchestrator:
         await self._redis.invalidate_dashboard_cache(user_id)
 
         await self._redis.set_last_transaction(user_id, txn_id)
-
-        if txn_doc.direction == "inflow":
-            await self._update_goal_progress(user_id, txn_doc.amount)
 
         if parsed.merchant_name:
             await self._check_subscription_match(
@@ -1125,6 +1129,69 @@ class Orchestrator:
         return {
             "status": "success",
             "goal_id": goal_id,
+            "response_text": response,
+        }
+
+    async def _handle_log_accumulation(self, payload: dict) -> dict:
+        """Explicitly add savings/investment amount to a specific goal."""
+        user_id = payload.get("user_id")
+        goal_name = payload.get("goal_name")
+        amount = payload.get("amount")
+        chat_id = payload.get("chat_id")
+
+        if not user_id or not goal_name or not amount:
+            return {
+                "status": "error",
+                "response_text": "Mai cần tên mục tiêu và số tiền tích lũy nha.",
+            }
+
+        matches = await self._goal_repo.find_by_name(user_id, goal_name)
+        if not matches:
+            return {
+                "status": "error",
+                "response_text": f"Mai không tìm thấy mục tiêu nào tên là <b>{goal_name}</b> đang hoạt động ạ.",
+            }
+        
+        if len(matches) > 1:
+            goal_list = ", ".join([f"<b>{g.name}</b>" for g in matches])
+            return {
+                "status": "ambiguous",
+                "response_text": (
+                    f"Mai thấy bạn có nhiều mục tiêu liên quan đến '{goal_name}': {goal_list}. "
+                    "Bạn nói rõ hơn là cái nào nhé!"
+                ),
+            }
+
+        goal = matches[0]
+        goal_id = str(goal.id)
+        new_amount = (goal.current_amount or 0.0) + float(amount)
+        
+        await self._goal_repo.update_progress(goal_id, user_id, new_amount)
+        if new_amount >= goal.target_amount:
+            await self._goal_repo.set_status(goal_id, user_id, "achieved")
+            logger.info("Goal %s achieved for user %s via log_accumulation", goal_id, user_id)
+
+        # Store as savingflow transaction
+        txn_doc = TransactionDocument(
+            user_id=user_id,
+            source="chat",
+            amount=float(amount),
+            direction="savingflow",
+            raw_text=payload.get("message", f"Tích lũy cho {goal.name}"),
+            category_id="Tích lũy",
+            transaction_time=datetime.now(UTC),
+            agent_confidence="high",
+            goal_id=goal_id,
+            ai_metadata={"goal_name": goal.name},
+        )
+        txn_id = await self._transaction_repo.insert(txn_doc)
+        await self._redis.invalidate_dashboard_cache(user_id)
+
+        response = payload.get("intent_response") or f"Đã ghi nhận tích lũy {float(amount):,.0f}đ vào <b>{goal.name}</b> nhé!"
+        return {
+            "status": "success",
+            "goal_id": goal_id,
+            "transaction_id": txn_id,
             "response_text": response,
         }
 

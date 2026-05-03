@@ -47,6 +47,7 @@ class IntentResult(BaseModel):
         "mark_subscription_paid",
         "cancel_subscription",
         "update_subscription",
+        "log_accumulation",
         "general_chat",
     ]
     payload: dict = Field(default_factory=dict)

@@ -52,11 +52,24 @@ erDiagram
         string raw_text
         string merchant_name
         ObjectId category_id FK
+        ObjectId goal_id FK
         list tags
         datetime transaction_time
         string agent_confidence
         bool user_corrected
         dict ai_metadata
+    }
+    
+    GOAL {
+        ObjectId _id PK
+        ObjectId user_id FK
+        string name
+        float target_amount
+        float current_amount
+        string category
+        string icon
+        string status
+        datetime deadline
     }
 
     CATEGORY {
@@ -151,7 +164,7 @@ Core financial data. Immutable after creation.
 | `source` | string | `notification` / `chat` / `voice` / `manual` |
 | `amount` | float | Transaction amount |
 | `currency` | string | e.g., "VND" |
-| `direction` | string | `inflow` / `outflow` |
+| `direction` | string | `inflow` / `outflow` / `savingflow` |
 | `raw_text` | string | Original unprocessed text |
 | `merchant_name` | string | AI-extracted merchant |
 | `category_id` | ObjectId | FK → `categories` |
@@ -160,11 +173,13 @@ Core financial data. Immutable after creation.
 | `created_at` | datetime | When the record was created |
 | `agent_confidence` | string | `high` / `medium` / `low` |
 | `user_corrected` | bool | Whether user corrected AI classification |
+| `goal_id` | ObjectId | FK → `goals` |
 | `ai_metadata` | dict | Agent processing details |
 
 **Indexes**:
 - `user_id` + `transaction_time` (compound, primary query pattern)
 - `user_id` + `category_id` (compound, aggregation)
+- `user_id` + `goal_id` (compound, filtering)
 - `merchant_name` (text index)
 
 ---
@@ -348,3 +363,21 @@ When a user requests account deletion, the system performs a cascading delete ac
 8. **User Account**: The primary identity record (invalidates JWTs).
 
 This logic is verified via unit tests using a mock database environment.
+
+---
+
+### `goals`
+
+User-defined financial objectives.
+
+| Field | Type | Description |
+|---|---|---|
+| `user_id` | string | FK → `users.user_id` |
+| `name` | string | Goal name, e.g. "Máy ảnh" |
+| `target_amount` | float | Target amount in VND |
+| `current_amount` | float | Amount already saved/accumulated |
+| `category` | string | Optional category name |
+| `icon` | string | Emoji icon |
+| `status` | string | `active` / `achieved` / `cancelled` |
+| `deadline` | datetime | Optional deadline (UTC) |
+| `created_at` | datetime | UTC |

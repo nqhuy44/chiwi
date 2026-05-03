@@ -25,7 +25,7 @@ services:
     image: mongo:8
     container_name: chiwi-mongo
     ports:
-      - "127.0.0.1:27017:27017"
+      - "27017:27017"
     volumes:
       - ./data/mongo:/data/db
     restart: unless-stopped
@@ -35,17 +35,6 @@ services:
     image: redis:8-alpine
     container_name: chiwi-redis
     ports:
-      - "127.0.0.1:6379:6379"
+      - "6379:6379"
     restart: unless-stopped
     logging: *default-logging
-
-  api:
-    <<: *app-config
-    container_name: chiwi-api
-    ports:
-      - "127.0.0.1:8000:8000"
-
-  worker:
-    <<: *app-config
-    container_name: chiwi-worker
-    command: ["python", "-m", "src.worker"]

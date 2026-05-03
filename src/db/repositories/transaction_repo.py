@@ -118,6 +118,7 @@ class TransactionRepository:
         direction: str | None = None,
         limit: int = 20,
         after_id: str | None = None,
+        goal_id: str | None = None,
     ) -> list[TransactionDocument]:
         conditions = [TransactionDocument.user_id == user_id]
         if start_date:
@@ -128,6 +129,8 @@ class TransactionRepository:
             conditions.append(TransactionDocument.category_id == category_id)
         if direction:
             conditions.append(TransactionDocument.direction == direction)
+        if goal_id:
+            conditions.append(TransactionDocument.goal_id == goal_id)
         if after_id:
             try:
                 conditions.append(TransactionDocument.id < PydanticObjectId(after_id))
@@ -136,6 +139,12 @@ class TransactionRepository:
 
         return await TransactionDocument.find(*conditions).sort("-transaction_time", "-id").limit(limit).to_list()
 
+    async def find_by_goal(self, user_id: str, goal_id: str, limit: int = 50) -> list[TransactionDocument]:
+        return await TransactionDocument.find(
+            TransactionDocument.user_id == user_id,
+            TransactionDocument.goal_id == goal_id
+        ).sort("-transaction_time").limit(limit).to_list()
+
     async def count_in_period(
         self,
         user_id: str,
@@ -143,6 +152,7 @@ class TransactionRepository:
         end_date: datetime,
         category_id: str | None = None,
         direction: str | None = None,
+        goal_id: str | None = None,
     ) -> int:
         conditions = [
             TransactionDocument.user_id == user_id,
@@ -153,6 +163,8 @@ class TransactionRepository:
             conditions.append(TransactionDocument.category_id == category_id)
         if direction:
             conditions.append(TransactionDocument.direction == direction)
+        if goal_id:
+            conditions.append(TransactionDocument.goal_id == goal_id)
 
         return await TransactionDocument.find(*conditions).count()
 

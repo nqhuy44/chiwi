@@ -131,6 +131,8 @@ async def _handle_callback_query(callback_query: dict) -> None:
     if not user or not user.is_active:
         logger.warning("Unauthorized callback from chat_id=%s", chat_id)
         return
+    
+    internal_user_id = user.user_id
 
     telegram = container.telegram
     orchestrator = container.orchestrator
@@ -159,7 +161,7 @@ async def _handle_callback_query(callback_query: dict) -> None:
             await telegram.answer_callback_query(cq_id, text="Danh mục không hợp lệ.")
             return
         payload = {
-            "user_id": from_id,
+            "user_id": internal_user_id,
             "transaction_id": txn_id,
             "new_category": new_category,
             "source": "telegram_callback",
@@ -180,13 +182,13 @@ async def _handle_callback_query(callback_query: dict) -> None:
             await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
             return
         txn = await container.transaction_repo.find_by_id(txn_id)
-        if not txn or txn.user_id != from_id:
+        if not txn or txn.user_id != internal_user_id:
             await telegram.answer_callback_query(cq_id, text="Không tìm thấy giao dịch.")
             return
         if txn.locked:
             await telegram.answer_callback_query(cq_id, text="🔒 Đã xác nhận rồi.")
             return
-        await container.transaction_repo.lock(txn_id, from_id)
+        await container.transaction_repo.lock(txn_id, internal_user_id)
         await telegram.answer_callback_query(cq_id, text="✅ Đã xác nhận và khoá giao dịch.")
         await telegram.edit_message_reply_markup(chat_id, message_id, keyboard=None)
 
@@ -200,7 +202,7 @@ async def _handle_callback_query(callback_query: dict) -> None:
             await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
             return
         txn = await container.transaction_repo.find_by_id(txn_id)
-        if not txn or txn.user_id != from_id:
+        if not txn or txn.user_id != internal_user_id:
             await telegram.answer_callback_query(cq_id, text="Không tìm thấy giao dịch.")
             return
         if txn.locked:
@@ -223,7 +225,7 @@ async def _handle_callback_query(callback_query: dict) -> None:
             await telegram.answer_callback_query(cq_id, text="ID giao dịch không hợp lệ.")
             return
         result = await orchestrator.route("delete_transaction", {
-            "user_id": from_id,
+            "user_id": internal_user_id,
             "transaction_id": txn_id,
         })
         response_text = result.get("response_text", "✅ Đã xoá.")
@@ -249,7 +251,7 @@ async def _handle_callback_query(callback_query: dict) -> None:
             await telegram.answer_callback_query(cq_id, text="Chu kỳ không hợp lệ.")
             return
         result = await orchestrator.handle_subscription_register({
-            "user_id": from_id,
+            "user_id": internal_user_id,
             "name": merchant,
             "merchant_name": merchant,
             "amount": amount,

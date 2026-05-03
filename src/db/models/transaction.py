@@ -9,7 +9,7 @@ class TransactionDocument(Document):
     source: Literal["notification", "chat", "voice", "manual"]
     amount: float
     currency: str = "VND"
-    direction: Literal["inflow", "outflow"]
+    direction: Literal["inflow", "outflow", "savingflow"]
     raw_text: str
     merchant_name: str | None = None
     category_id: str | None = None
@@ -21,6 +21,7 @@ class TransactionDocument(Document):
     locked: bool = False  # user-confirmed; blocks edits and deletes
     ai_metadata: dict = Field(default_factory=dict)
     subscription_id: str | None = None   # set when this charge matches a registered subscription
+    goal_id: str | None = None          # set when this transaction is an accumulation for a goal
 
     class Settings:
         name = "transactions"
