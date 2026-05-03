@@ -97,12 +97,15 @@ class BehavioralAgent:
 
         # Send via Telegram if available
         sent_tg = False
-        chat_id = profile.extras.get("telegram_chat_id")
+        chat_id = profile.chat_id
         if self._telegram and chat_id:
+            logger.info("Delivering nudge to Telegram chat_id=%s", chat_id)
             send_result = await self._telegram.send_silent_message(
                 chat_id=chat_id, text=message
             )
             sent_tg = bool(send_result)
+        else:
+            logger.info("Telegram delivery skipped: telegram_service=%s chat_id=%s", bool(self._telegram), bool(chat_id))
 
         # Persist to DB for Mobile Notification History
         # All nudges are visible on Mobile regardless of TG delivery status

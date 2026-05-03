@@ -383,7 +383,6 @@ async def run_behavioral_analysis() -> None:
         for trigger in triggers:
             payload = {
                 "user_id": user_id,
-                "chat_id": profile.chat_id,  # May be None, BehavioralAgent handles it
                 "nudge_type": trigger["nudge_type"],
                 "trigger_data": trigger.get("trigger_data") or {},
             }

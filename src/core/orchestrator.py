@@ -134,16 +134,13 @@ class Orchestrator:
                 return {"status": "unknown_event"}
 
     async def _handle_notification(self, payload: dict) -> dict:
-        """Pipeline: Ingestion Agent → Tagging Agent → Store.
-
-        Called when the Android app forwards a raw bank notification.
-        All parsing is done server-side so mobile releases are not needed
-        to fix parsing bugs.
+        """Process an incoming bank notification from Android/SMS.
+        
+        Ingestion Agent → Tagging Agent → Store.
         """
+        user_id = payload.get("user_id", "")
         raw_text = payload.get("raw_text", "")
         bank_hint = payload.get("bank_hint")
-        user_id = payload.get("user_id", "")
-        chat_id = payload.get("chat_id", "")
 
         if not raw_text:
             return {"status": "empty_notification"}
@@ -175,14 +172,18 @@ class Orchestrator:
         logger.info("Transaction stored from Android notification: %s", txn_id)
         await self._redis.invalidate_dashboard_cache(user_id)
 
-        if chat_id and parsed.merchant_name:
+        if parsed.merchant_name:
             await self._check_subscription_match(
-                user_id, parsed.merchant_name, parsed.amount or 0.0,
-                parsed.transaction_time or datetime.now(UTC), chat_id, txn_id,
+                user_id,
+                parsed.merchant_name,
+                parsed.amount or 0.0,
+                txn_doc.transaction_time,
+                transaction_id=txn_id,
             )
 
         await self._redis.set_last_transaction(user_id, txn_id)
 
+        chat_id = await self._get_user_chat_id(user_id)
         if chat_id:
             direction_icon = "➕" if txn_doc.direction == "inflow" else "➖"
             amount_str = f"{txn_doc.amount:,.0f}"
@@ -201,14 +202,13 @@ class Orchestrator:
         }
 
     async def _handle_chat(self, payload: dict) -> dict:
-        """Conversational Agent -> Tagging Agent -> Store."""
+        """Handle conversational input via text or voice."""
         user_id = payload.get("user_id", "")
-        chat_id = payload.get("chat_id", "")
         source = payload.get("source", "")
         profile = await get_profile(user_id)
         user_tz = profile.timezone
-
         raw_text = payload.get("message", "")
+        chat_id = await self._get_user_chat_id(user_id)
 
         # Step 1: Parse intent (text or voice)
         if source == "telegram_voice":
@@ -217,13 +217,13 @@ class Orchestrator:
             if not audio_bytes:
                 return {"status": "error", "response_text": "Không nhận được file âm thanh."}
             intent_result = await self._conversational.process_voice(
-                audio_bytes, mime_type, chat_id, user_timezone=user_tz, profile=profile
+                audio_bytes, mime_type, user_id=user_id, user_timezone=user_tz, profile=profile
             )
         else:
             if not raw_text:
                 return {"status": "empty_message"}
             intent_result = await self._conversational.process_message(
-                message=raw_text, chat_id=chat_id, user_timezone=user_tz, profile=profile
+                message=raw_text, user_id=user_id, user_timezone=user_tz, profile=profile
             )
 
         if intent_result.intent == "request_report":
@@ -394,7 +394,6 @@ class Orchestrator:
         if intent_result.intent == "log_accumulation":
             return await self._handle_log_accumulation({
                 "user_id": user_id,
-                "chat_id": chat_id,
                 "amount": intent_result.payload.get("amount"),
                 "goal_name": intent_result.payload.get("goal_name"),
                 "message": raw_text,
@@ -464,7 +463,7 @@ class Orchestrator:
         if parsed.merchant_name:
             await self._check_subscription_match(
                 user_id, parsed.merchant_name, parsed.amount or 0.0,
-                parsed.transaction_time or datetime.now(UTC), chat_id, txn_id,
+                parsed.transaction_time or datetime.now(UTC), transaction_id=txn_id,
             )
 
         return {
@@ -478,13 +477,12 @@ class Orchestrator:
     async def _handle_scheduled(self, payload: dict) -> dict:
         """Behavioral Agent -> Nudge.
 
-        Expects payload: {user_id, chat_id, nudge_type, trigger_data}.
+        Expects payload: {user_id, nudge_type, trigger_data}.
         ``trigger_data`` is produced upstream by the trigger engine
         (Phase 3.2); for Phase 3.1 callers (e.g. the worker, manual tests)
         pass it directly.
         """
         user_id = payload.get("user_id")
-        chat_id = payload.get("chat_id")
         nudge_type = payload.get("nudge_type")
 
         if not user_id or not nudge_type:
@@ -496,7 +494,6 @@ class Orchestrator:
 
         request = NudgeRequest(
             user_id=user_id,
-            chat_id=chat_id,
             nudge_type=nudge_type,
             trigger_data=payload.get("trigger_data") or {},
         )
@@ -993,7 +990,7 @@ class Orchestrator:
             category_id=budget.category_id,
             event_type="temp_override_set",
             old_value={"limit_amount": old_limit},
-            new_value={"temp_limit": float(temp_limit), "expires_at": expires_at.isoformat()},
+            new_value={"limit_amount": float(temp_limit), "expires_at": expires_at.isoformat()},
             reason=reason,
         ))
 
@@ -1137,7 +1134,6 @@ class Orchestrator:
         user_id = payload.get("user_id")
         goal_name = payload.get("goal_name")
         amount = payload.get("amount")
-        chat_id = payload.get("chat_id")
 
         if not user_id or not goal_name or not amount:
             return {
@@ -1579,8 +1575,7 @@ class Orchestrator:
         user_id: str,
         merchant_name: str,
         amount: float,
-        charged_at: datetime,
-        chat_id: str,
+        transaction_time: datetime,
         transaction_id: str | None = None,
     ) -> None:
         """After storing a transaction, check if it matches a subscription.
@@ -1624,6 +1619,7 @@ class Orchestrator:
                 "callback_data": f"sub_reg|{safe_merchant}|{int(amount)}|{detected_period}",
             }]]
             if self._telegram:
+                chat_id = await self._get_user_chat_id(user_id)
                 await self._telegram.send_message_with_keyboard(
                     chat_id=chat_id,
                     text=(

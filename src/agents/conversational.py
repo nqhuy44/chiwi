@@ -63,13 +63,13 @@ class ConversationalAgent:
     async def process_message(
         self,
         message: str,
-        chat_id: str,
+        user_id: str,
         session_context: dict | None = None,
         user_timezone: str | None = None,
         profile: UserProfile | None = None,
     ) -> IntentResult:
         """Process a text message and determine intent."""
-        logger.info("Processing message from chat_id=%s", chat_id)
+        logger.info("Processing message from user_id=%s", user_id)
 
         prompt = self._build_prompt(user_timezone, profile)
 
@@ -100,12 +100,12 @@ class ConversationalAgent:
         self,
         audio_bytes: bytes,
         audio_mime_type: str,
-        chat_id: str,
+        user_id: str,
         user_timezone: str | None = None,
         profile: UserProfile | None = None,
     ) -> IntentResult:
         """Process a voice message via Gemini native audio STT + intent extraction."""
-        logger.info("Processing voice from chat_id=%s", chat_id)
+        logger.info("Processing voice from user_id=%s", user_id)
 
         if not audio_bytes:
             return IntentResult(

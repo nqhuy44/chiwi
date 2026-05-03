@@ -308,7 +308,6 @@ async def _handle_command(
         trigger_data["source"] = "telegram"
         payload = {
             "user_id": real_user_id,
-            "chat_id": chat_id,
             "nudge_type": nudge_type,
             "trigger_data": trigger_data,
         }
@@ -351,15 +350,11 @@ async def receive_notification(
     if not user or not user.is_active:
         raise HTTPException(status_code=401, detail="Unauthorized user")
 
-    orchestrator = container.orchestrator
-    profile = container.orchestrator._get_user_chat_id(x_user_id)
-
     event = {
         "source": "android",
         "raw_text": payload.raw_text,
         "bank_hint": payload.bank_hint,
         "user_id": x_user_id,
-        "chat_id": profile,
         "timestamp": payload.timestamp,
     }
 
@@ -409,7 +404,6 @@ async def _handle_message_with_id(message: dict, update_id: int | None, real_use
             "source": "telegram_voice",
             "audio_bytes": audio_bytes,
             "audio_mime_type": mime_type,
-            "chat_id": chat_id,
             "user_id": real_user_id,
         }
         result = await orchestrator.route("voice", payload)
@@ -426,7 +420,6 @@ async def _handle_message_with_id(message: dict, update_id: int | None, real_use
     payload = {
         "source": "telegram",
         "message": text,
-        "chat_id": chat_id,
         "user_id": real_user_id,
     }
 
