@@ -117,7 +117,8 @@ class TaggingAgent:
             is_transaction=True,
             amount=0,
             merchant_name=merchant_name,
-            direction="outflow"
+            direction="outflow",
+            raw_text=""
         )
         result = await self.enrich(txn, user_id)
         return {
