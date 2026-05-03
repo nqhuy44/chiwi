@@ -813,7 +813,7 @@ async def approve_pending(
         category_id=body.category or "Khác",
         transaction_time=datetime.now(UTC),
         agent_confidence="high",
-        source="mobile_notification",
+        source="notification",
         raw_text=body.raw_text,
     )
     await container.transaction_repo.insert(txn_doc)
