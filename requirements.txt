@@ -14,6 +14,7 @@ passlib>=1.7.4
 bcrypt==4.0.1
 beanie<2.0.0
 python-dateutil>=2.9.0
+tzdata>=2025.1
 
 # Development
 black>=26.3.1
