@@ -45,6 +45,9 @@ from src.core.schemas import (
     MobileTransactionListResponse,
     MobileUnreadCountResponse,
     UserProfile,
+    MobileAnalyzeNotificationRequest,
+    MobileAnalyzeNotificationResponse,
+    MobileApprovePendingTransactionRequest,
 )
 from src.core.utils import get_budget_window, get_date_range, resolve_date_range, get_sliding_window
 from src.db.repositories.budget_repo import effective_limit
@@ -752,3 +755,70 @@ async def delete_user_account(user_id: str = Depends(get_current_user)):
     await container.redis.invalidate_dashboard_cache(user_id)
     
     return {"status": "success", "message": "All user data has been permanently deleted"}
+
+
+@router.post("/analyze-notification", response_model=MobileAnalyzeNotificationResponse)
+async def analyze_notification(
+    body: MobileAnalyzeNotificationRequest,
+    user_id: str = Depends(get_current_user)
+) -> MobileAnalyzeNotificationResponse:
+    """Analyze a raw notification text via the Ingestion Agent."""
+    logger.info("Analyzing notification for user %s: %s", user_id, body.text[:50])
+    
+    # Identify bank hint from package name if possible
+    bank_hint = None
+    if "vietcombank" in body.package_name.lower():
+        bank_hint = "Vietcombank"
+    elif "mbbank" in body.package_name.lower():
+        bank_hint = "MB Bank"
+    elif "techcombank" in body.package_name.lower():
+        bank_hint = "Techcombank"
+    elif "tpb" in body.package_name.lower():
+        bank_hint = "TPBank"
+
+    parsed = await container.ingestion_agent.parse(body.text, bank_hint=bank_hint)
+    
+    if not parsed.is_transaction:
+        return MobileAnalyzeNotificationResponse(is_transaction=False)
+
+    # Use Tagging agent to get category if possible
+    category = None
+    if parsed.merchant_name:
+        tag_result = await container.tagging_agent.tag(user_id, parsed.merchant_name)
+        category = tag_result.get("category")
+
+    return MobileAnalyzeNotificationResponse(
+        is_transaction=True,
+        amount=int(parsed.amount or 0),
+        merchant=parsed.merchant_name,
+        category=category,
+        currency=parsed.currency or "VND"
+    )
+
+
+@router.post("/approve-pending")
+async def approve_pending(
+    body: MobileApprovePendingTransactionRequest,
+    user_id: str = Depends(get_current_user)
+):
+    """Save a confirmed pending transaction to the database."""
+    from src.db.models.transaction import TransactionDocument
+    
+    txn_doc = TransactionDocument(
+        user_id=user_id,
+        amount=body.amount,
+        currency="VND",
+        direction="outflow", # Notification based is usually outflow
+        merchant_name=body.merchant,
+        category_id=body.category or "Khác",
+        transaction_time=datetime.now(UTC),
+        agent_confidence="high",
+        source="mobile_notification",
+        raw_text=body.raw_text,
+    )
+    await container.transaction_repo.insert(txn_doc)
+    
+    # Invalidate dashboard cache
+    await container.redis.invalidate_dashboard_cache(user_id)
+    
+    return {"status": "ok", "transaction_id": str(txn_doc.id)}

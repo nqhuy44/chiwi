@@ -10,48 +10,21 @@ Automatically captures bank transaction notifications from Android (MacroDroid/T
 
 ## How It Works
 
-1. **Android**: MacroDroid/Tasker listens for notifications from bank apps → sends HTTP POST to ChiWi webhook.
-2. **iOS**: Shortcuts automation triggers on bank SMS → sends content to ChiWi API via "Get Contents of URL".
-3. **Gateway**: Validates `user_id`, masks PII (account numbers), forwards to Orchestrator.
-4. **Ingestion Agent**: Gemini Flash extracts amount, merchant, time, direction from raw text.
-5. **Tagging Agent**: Classifies category, generates tags based on historical context.
-6. **Confirmation**: Telegram bot sends silent confirmation with "Edit" button.
+1. **Android**: ChiWi native app intercepts bank notifications via `NotificationListenerService`.
+2. **Analysis**: The native app sends the raw text to `POST /api/mobile/analyze-notification`.
+3. **Ingestion Agent**: Gemini Flash extracts the transaction amount, merchant, time, and direction.
+4. **Tagging Agent**: Classifies category based on historical context.
+5. **Confirmation**: The Android app presents the parsed transaction to the user for confirmation.
+6. **Approval**: Upon confirmation, the app sends `POST /api/mobile/approve-pending` to persist the transaction in the database.
+7. **iOS**: Shortcuts automation triggers on bank SMS → sends content to ChiWi API via "Get Contents of URL" (Legacy/Fallback).
 
 ## API Contract
 
-### `POST /api/webhook/notification`
+The primary endpoints for ingestion have been migrated to the Mobile API. Please refer to `MOBILE_API.md` for full request/response schemas:
+- `POST /api/mobile/analyze-notification`
+- `POST /api/mobile/approve-pending`
 
-**Headers**:
-```
-X-User-Id: <telegram_user_id>
-Content-Type: application/json
-```
-
-**Request Body**:
-```json
-{
-  "source": "macrodroid",
-  "app_package": "com.VCB",
-  "notification_title": "Biến động số dư",
-  "notification_text": "VCB: -100.000VND; 14:30 20/04/26; SD: 10.250.000; ND: highlands coffee",
-  "timestamp": "2026-04-20T14:30:00+07:00"
-}
-```
-
-**Response** (200):
-```json
-{
-  "status": "saved",
-  "transaction_id": "663f...",
-  "parsed": {
-    "amount": 100000,
-    "direction": "outflow",
-    "merchant": "Highlands Coffee",
-    "category": "☕ Cafe",
-    "confidence": "high"
-  }
-}
-```
+(Legacy webhook `/api/webhook/notification` is retained for iOS Shortcuts support).
 
 ## Supported Bank Formats
 
@@ -69,15 +42,15 @@ The Ingestion Agent handles format variations via LLM understanding rather than 
 
 | Scenario | Handling |
 |---|---|
-| Non-financial notification | Agent returns `is_transaction: false`, silently ignored |
-| Duplicate (same amount + 5 min window) | Prompt user: "Giao dịch trùng? Xác nhận?" |
-| Low confidence parse | Send with ⚠️ warning + Edit button |
-| Webhook auth failure | Return 401, log attempt |
+| Non-financial notification | Agent returns `is_transaction: false`, silently ignored by mobile app |
+| Duplicate (same amount + 5 min window) | (Handled by backend transaction repository logic) |
+| Low confidence parse | User manually corrects fields in the mobile app before approval |
+| Missing permissions | Mobile app prompts user to enable Notification Access in System Settings |
 
-## Setup Guide (Android — MacroDroid)
+## Setup Guide (Android)
 
-1. Install MacroDroid from Play Store
-2. Create macro: **Trigger** → Notification Received → Select bank apps
-3. **Action** → HTTP Request → POST to `https://<your-server>/api/webhook/notification`
-4. Set JSON body with `%notification_title%` and `%notification_text%` variables
-5. Disable battery optimization for MacroDroid
+1. Open the ChiWi Android App.
+2. Go to **Profile** (Cài đặt).
+3. Toggle **Tự động phát hiện** (Auto-detect).
+4. Grant **Notification Access** (Quyền truy cập thông báo) in Android System Settings when prompted.
+5. Select the specific banking apps to monitor in the **Chọn ứng dụng theo dõi** menu.

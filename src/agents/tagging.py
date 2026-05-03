@@ -107,6 +107,24 @@ class TaggingAgent:
 
         return {"category_name": category, "tags": tags}
 
+    async def tag(self, user_id: str, merchant_name: str) -> dict:
+        """Convenience method for merchant-only tagging without a full ParsedTransaction."""
+        if not merchant_name:
+            return {"category": FALLBACK_CATEGORY, "tags": []}
+
+        # Mock a transaction for enrich
+        txn = ParsedTransaction(
+            is_transaction=True,
+            amount=0,
+            merchant_name=merchant_name,
+            direction="outflow"
+        )
+        result = await self.enrich(txn, user_id)
+        return {
+            "category": result.get("category_name", FALLBACK_CATEGORY),
+            "tags": result.get("tags", [])
+        }
+
     async def _load_history(
         self, user_id: str, merchant: str | None
     ) -> list[dict]:

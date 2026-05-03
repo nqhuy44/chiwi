@@ -646,9 +646,9 @@ Retrieve the current user's profile and personalization settings.
 
 ---
 
-### `PUT /profile`
+### `PATCH /profile`
 
-Update user profile settings.
+Update user profile settings. Accepts any subset of fields.
 
 #### Request
 
@@ -660,13 +660,72 @@ Returns the updated profile.
 
 ---
 
-### `DELETE /profile`
+### `DELETE /user`
 
 **DANGER: Permanent Account Deletion.**
 
-Triggers the cascading delete of all user data (Transactions, Budgets, Goals, Subscriptions, Nudges). This action is irreversible.
+Triggers the cascading delete of all user data (Transactions, Budgets, Goals, Subscriptions, Nudges, Profile). This action is irreversible.
 
-#### Response `204 No Content`
+#### Response `200`
+
+```json
+{ "status": "success", "message": "All user data has been permanently deleted" }
+```
+
+---
+
+### `POST /analyze-notification`
+
+Analyze a raw notification text using the Ingestion Agent without saving it. This allows the mobile app to show a preview/confirmation dialog to the user before storing the transaction.
+
+#### Request
+
+```json
+{
+  "package_name": "com.vietcombank.mobile",
+  "text": "Vietcombank: TK 123*****890 -100,000 VND. So du: 5,000,000 VND. 29/04/2026 09:31"
+}
+```
+
+#### Response `200`
+
+```json
+{
+  "is_transaction": true,
+  "amount": 100000,
+  "merchant": "Vietcombank",
+  "category": "Ăn uống",
+  "currency": "VND"
+}
+```
+
+---
+
+### `POST /approve-pending`
+
+Save a transaction that was previously analyzed and confirmed by the user in the mobile UI.
+
+#### Request
+
+```json
+{
+  "package_name": "com.vietcombank.mobile",
+  "raw_text": "Vietcombank: TK 123*****890 -100,000 VND. So du: 5,000,000 VND. 29/04/2026 09:31",
+  "amount": 100000,
+  "merchant": "Vietcombank",
+  "category": "Ăn uống",
+  "note": "Ăn trưa"
+}
+```
+
+#### Response `200`
+
+```json
+{
+  "status": "ok",
+  "transaction_id": "6630e1a2b4e9f00012345678"
+}
+```
 
 ---
 

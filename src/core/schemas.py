@@ -330,6 +330,28 @@ class MobileCategorySpendingResponse(BaseModel):
     total_outflow: float
     breakdown: list[MobileCategoryItem]
 
+
+class MobileAnalyzeNotificationRequest(BaseModel):
+    package_name: str
+    text: str
+
+
+class MobileAnalyzeNotificationResponse(BaseModel):
+    is_transaction: bool
+    amount: int = 0
+    merchant: str | None = None
+    category: str | None = None
+    currency: str = "VND"
+
+
+class MobileApprovePendingTransactionRequest(BaseModel):
+    package_name: str
+    raw_text: str
+    amount: float
+    merchant: str | None = None
+    category: str | None = None
+    note: str | None = None
+
 # --- Auth ---
 
 

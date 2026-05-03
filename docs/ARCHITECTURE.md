@@ -136,7 +136,7 @@ graph LR
     GEMINI["Google Gemini API"] <--> APP
     APP <--> MONGO & REDIS
     WB & WBU & WR <--> MONGO & REDIS
-    NOTIF -->|POST /api/webhook/notification| APP
+    NOTIF -->|POST /api/mobile/analyze-notification| APP
     DASH -->|GET /api/mobile/*| APP
     CI -->|docker compose up -d| VM
 ```

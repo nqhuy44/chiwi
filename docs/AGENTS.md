@@ -256,7 +256,7 @@ class AgentMessage(BaseModel):
     payload: dict           # Structured data
     metadata: dict          # Processing info (model, latency, confidence)
     timestamp: datetime
-    chat_id: str            # Required for all messages
+    user_id: str            # Required for all messages
 ```
 
 All inter-agent data passes through the Orchestrator — agents never call each other directly.

@@ -7,6 +7,7 @@ Injected into FastAPI via lifespan and Depends().
 
 import logging
 from dataclasses import dataclass, field
+from typing import Optional
 
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 
@@ -51,6 +52,10 @@ class AppContainer:
 
     # Dashboard service (initialized after repos + redis are ready)
     dashboard_service: DashboardService | None = None
+
+    # Agents
+    ingestion_agent: Optional["IngestionAgent"] = None
+    tagging_agent: Optional["TaggingAgent"] = None
 
     # Orchestrator (initialized after all services are ready)
     _orchestrator: object | None = None
@@ -122,6 +127,12 @@ class AppContainer:
             nudge_repo=self.nudge_repo,
             redis=self.redis,
         )
+
+        # Agents
+        from src.agents.ingestion import IngestionAgent
+        from src.agents.tagging import TaggingAgent
+        self.ingestion_agent = IngestionAgent(self.gemini)
+        self.tagging_agent = TaggingAgent(self.gemini, self.redis, transaction_repo=self.transaction_repo)
 
         # Orchestrator
         from src.core.orchestrator import Orchestrator

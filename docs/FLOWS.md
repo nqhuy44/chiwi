@@ -465,21 +465,31 @@ sequenceDiagram
     participant Mongo as MongoDB (Beanie)
 
     Note over App, Mongo: Registration
-    App->>GW: POST /api/auth/register {user_id, password, display_name}
+    App->>GW: POST /api/auth/register {username, password, email}
     GW->>Auth: handle_register()
     Auth->>Auth: Hash password (bcrypt)
     Auth->>Mongo: UserDocument.insert()
     Auth->>Mongo: UserProfileDocument.insert() (default values)
-    Auth-->>App: 201 Created
+    Auth-->>App: 200 OK {access_token, refresh_token, user_id}
 
     Note over App, Mongo: Login
-    App->>GW: POST /api/auth/login {user_id, password}
+    App->>GW: POST /api/auth/login {username, password}
     GW->>Auth: handle_login()
-    Auth->>Mongo: UserDocument.find(user_id)
+    Auth->>Mongo: UserDocument.find(username)
     Auth->>Auth: Verify hash (bcrypt)
     Auth->>Auth: Generate JWT (Access + Refresh)
-    Auth->>Mongo: Store refresh_token_hash
-    Auth-->>App: 200 OK {access_token, refresh_token}
+    Auth-->>App: 200 OK {access_token, refresh_token, user_id}
+
+    Note over App, Mongo: Password Reset
+    App->>GW: POST /api/auth/request-reset {email}
+    GW->>Mongo: UserDocument.find_by_email()
+    GW->>Mongo: Store reset_code + expires_at
+    GW-->>App: 200 OK (Email sent)
+    App->>GW: POST /api/auth/confirm-reset {email, code, new_password}
+    GW->>Mongo: Verify reset_code & expiry
+    GW->>Auth: Hash new_password
+    GW->>Mongo: UserDocument.update(hashed_password)
+    GW-->>App: 200 OK (Password updated)
 
     Note over App, Mongo: Authenticated Request
     App->>GW: GET /api/mobile/dashboard (Auth: Bearer <token>)
