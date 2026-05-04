@@ -776,7 +776,13 @@ async def analyze_notification(
     elif "tpb" in body.package_name.lower():
         bank_hint = "TPBank"
 
-    parsed = await container.ingestion_agent.parse(body.text, bank_hint=bank_hint)
+    # For some banks (like Techcombank), the amount is in the Title.
+    # Combine them so the Ingestion Agent sees everything.
+    full_text = body.text
+    if body.title:
+        full_text = f"Title: {body.title}\nBody: {body.text}"
+
+    parsed = await container.ingestion_agent.parse(full_text, bank_hint=bank_hint)
     
     if not parsed.is_transaction:
         return MobileAnalyzeNotificationResponse(is_transaction=False)
@@ -792,7 +798,8 @@ async def analyze_notification(
         amount=int(parsed.amount or 0),
         merchant=parsed.merchant_name,
         category=category,
-        currency=parsed.currency or "VND"
+        currency=parsed.currency or "VND",
+        direction=parsed.direction,
     )
 
 
@@ -808,7 +815,7 @@ async def approve_pending(
         user_id=user_id,
         amount=body.amount,
         currency="VND",
-        direction="outflow", # Notification based is usually outflow
+        direction=body.direction,
         merchant_name=body.merchant,
         category_id=body.category or "Khác",
         transaction_time=datetime.now(UTC),

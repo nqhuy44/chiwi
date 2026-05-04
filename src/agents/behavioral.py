@@ -56,6 +56,7 @@ class BehavioralAgent:
         profile = await get_profile(request.user_id)
 
         if profile.nudge_frequency == "off":
+            logger.info("Nudge suppressed: user disabled nudges")
             return self._blocked("user_disabled_nudges")
 
         is_manual = request.trigger_data.get("source") == "telegram"
@@ -64,6 +65,7 @@ class BehavioralAgent:
         if not is_manual:
             blocked_reason = await self._spam_check(request)
             if blocked_reason:
+                logger.info("Nudge suppressed by spam check: %s", blocked_reason)
                 return self._blocked(blocked_reason)
 
         # Generate message via Gemini
@@ -78,6 +80,7 @@ class BehavioralAgent:
         llm_blocked_reason = result.get("blocked_reason")
 
         if not should_send:
+            logger.info("Nudge suppressed by LLM: %s", llm_blocked_reason)
             return self._blocked(llm_blocked_reason or "llm_skipped")
 
         if not message:

@@ -334,6 +334,7 @@ class MobileCategorySpendingResponse(BaseModel):
 class MobileAnalyzeNotificationRequest(BaseModel):
     package_name: str
     text: str
+    title: str | None = None
 
 
 class MobileAnalyzeNotificationResponse(BaseModel):
@@ -342,12 +343,14 @@ class MobileAnalyzeNotificationResponse(BaseModel):
     merchant: str | None = None
     category: str | None = None
     currency: str = "VND"
+    direction: Literal["inflow", "outflow", "savingflow"] | None = None
 
 
 class MobileApprovePendingTransactionRequest(BaseModel):
     package_name: str
     raw_text: str
     amount: float
+    direction: Literal["inflow", "outflow", "savingflow"] = "outflow"
     merchant: str | None = None
     category: str | None = None
     note: str | None = None
