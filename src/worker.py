@@ -256,6 +256,49 @@ async def _saving_streak_trigger(user_id: str) -> dict | None:
     }
 
 
+async def _goal_progress_triggers(user_id: str) -> list[dict]:
+    """Fire goal_progress when savings reach 25%, 50%, 75%, or 100% of target."""
+    goal_repo = container.goal_repo
+    if not goal_repo:
+        return []
+
+    goals = await goal_repo.find_by_user(user_id, status="active")
+    triggers: list[dict] = []
+
+    for goal in goals:
+        if goal.target_amount <= 0:
+            continue
+
+        pct = (goal.current_amount / goal.target_amount) * 100
+
+        # Determine milestone
+        milestone = 0
+        if pct >= 100:
+            milestone = 100
+        elif pct >= 75:
+            milestone = 75
+        elif pct >= 50:
+            milestone = 50
+        elif pct >= 25:
+            milestone = 25
+
+        if milestone > 0:
+            triggers.append(
+                {
+                    "nudge_type": "goal_progress",
+                    "trigger_data": {
+                        "goal_name": goal.name,
+                        "target_amount": goal.target_amount,
+                        "current_amount": goal.current_amount,
+                        "progress_pct": round(pct, 1),
+                        "milestone": milestone,
+                        "reason": f"reached_{milestone}pct"
+                        if milestone < 100
+                        else "goal_achieved",
+                    },
+                }
+            )
+
     return triggers
 
 

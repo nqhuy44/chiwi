@@ -85,11 +85,12 @@ class BehavioralAgent:
 
         # Build Title based on type
         title_map = {
-            "spending_spike": "🔥 Cảnh báo chi tiêu!",
+            "spending_alert": "🔥 Cảnh báo chi tiêu!",
             "budget_warning": "⚠️ Sắp chạm trần ngân sách",
-            "goal_milestone": "🎯 Chúc mừng bạn!",
+            "budget_exceeded": "🚫 Vượt hạn mức chi tiêu",
+            "goal_progress": "🎯 Chúc mừng bạn!",
             "subscription_reminder": "🔄 Nhắc lịch thanh toán",
-            "impulse_check": "🤔 Suy nghĩ kỹ nhé",
+            "impulse_detection": "🤔 Suy nghĩ kỹ nhé",
             "saving_streak": "⭐ Phong độ tuyệt vời",
             "daily_analysis": "☀️ Phân tích chi tiêu hôm qua"
         }
