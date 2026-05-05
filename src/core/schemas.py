@@ -180,6 +180,7 @@ class MobileBudgetAlert(BaseModel):
 
 class MobileUpcomingSubscription(BaseModel):
     name: str
+    icon: str = "📅"
     amount: float
     next_charge_date: datetime
     due_in_days: int
@@ -187,6 +188,7 @@ class MobileUpcomingSubscription(BaseModel):
 
 class MobileJustPaidSubscription(BaseModel):
     name: str
+    icon: str = "✅"
     amount: float
     paid_at: datetime
 
@@ -269,6 +271,7 @@ class MobileAccumulateGoalRequest(BaseModel):
 class MobileSubscriptionItem(BaseModel):
     id: str
     name: str
+    icon: str = "📅"
     amount: float
     period: str
     next_charge_date: datetime

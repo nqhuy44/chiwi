@@ -196,8 +196,12 @@ class DashboardService:
                 continue
 
             due_in = max(0, (ncd - now_utc).days)
+            from src.core.categories import resolve_merchant_icon
+            icon = resolve_merchant_icon(sub.merchant_name, "Giải trí", icons)
+            
             upcoming.append({
                 "name": sub.name,
+                "icon": icon,
                 "amount": sub.amount,
                 "next_charge_date": ncd.isoformat(),
                 "due_in_days": due_in,
@@ -205,8 +209,12 @@ class DashboardService:
 
         just_paid = []
         for txn in just_paid_txns:
+            from src.core.categories import resolve_merchant_icon
+            icon = resolve_merchant_icon(txn.merchant_name, txn.category_id or "Giải trí", icons)
+            
             just_paid.append({
                 "name": txn.merchant_name or "Subscription",
+                "icon": icon,
                 "amount": txn.amount,
                 "paid_at": txn.transaction_time.isoformat(),
             })

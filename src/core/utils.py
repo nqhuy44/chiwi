@@ -18,11 +18,18 @@ def _resolve_tz(timezone: str | None) -> ZoneInfo:
     return ZoneInfo(timezone or settings.business_timezone)
 
 
+def _to_naive_utc(dt: datetime) -> datetime:
+    """Convert to UTC and strip tzinfo for DB compatibility."""
+    if dt.tzinfo is None:
+        return dt # Already naive
+    return dt.astimezone(UTC).replace(tzinfo=None)
+
+
 def _local_day_bounds(d: date, tz: ZoneInfo) -> Tuple[datetime, datetime]:
     """Return (00:00, 23:59:59.999999) for a local calendar day, in UTC."""
     start_local = datetime.combine(d, time.min, tzinfo=tz)
     end_local = datetime.combine(d, time.max, tzinfo=tz)
-    return start_local.astimezone(UTC), end_local.astimezone(UTC)
+    return _to_naive_utc(start_local), _to_naive_utc(end_local)
 
 
 def get_date_range(
@@ -44,12 +51,12 @@ def get_date_range(
     if period == "this_week":
         monday = today - timedelta(days=today.weekday())
         start_local = datetime.combine(monday, time.min, tzinfo=tz)
-        return start_local.astimezone(UTC), now_local.astimezone(UTC)
+        return _to_naive_utc(start_local), _to_naive_utc(now_local)
 
     if period == "this_month":
         first = today.replace(day=1)
         start_local = datetime.combine(first, time.min, tzinfo=tz)
-        return start_local.astimezone(UTC), now_local.astimezone(UTC)
+        return _to_naive_utc(start_local), _to_naive_utc(now_local)
 
     if period == "last_week":
         end_of_last_week = today - timedelta(days=today.weekday() + 1)
@@ -125,7 +132,7 @@ def parse_custom_range(
                 dt = datetime.fromisoformat(s)
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=tz)
-            return dt.astimezone(UTC)
+            return _to_naive_utc(dt)
         except (ValueError, TypeError):
             return None
 
@@ -171,11 +178,7 @@ def get_sliding_window(
     # start_dt is 'end_dt - window_size'
     start_local = end_local - timedelta(days=window_size)
     
-    # Convert to UTC and strip tzinfo for DB compatibility
-    return (
-        start_local.astimezone(UTC),
-        end_local.astimezone(UTC)
-    )
+    return _to_naive_utc(start_local), _to_naive_utc(end_local)
 
 
 def get_budget_window(

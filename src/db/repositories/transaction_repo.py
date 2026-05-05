@@ -128,6 +128,9 @@ class TransactionRepository:
         goal_id: str | None = None,
         subscription_id: str | None = None,
     ) -> list[TransactionDocument]:
+        from beanie import PydanticObjectId
+        from beanie.operators import In
+
         conditions = [TransactionDocument.user_id == user_id]
         if start_date:
             conditions.append(TransactionDocument.transaction_time >= start_date)
@@ -139,11 +142,11 @@ class TransactionRepository:
             conditions.append(TransactionDocument.direction == direction)
         if goal_id:
             conditions.append(TransactionDocument.goal_id == goal_id)
+
         if subscription_id:
-            from beanie import PydanticObjectId
             try:
                 obj_id = PydanticObjectId(subscription_id)
-                conditions.append({"subscription_id": {"$in": [subscription_id, obj_id]}})
+                conditions.append(In(TransactionDocument.subscription_id, [subscription_id, obj_id]))
             except Exception:
                 conditions.append(TransactionDocument.subscription_id == subscription_id)
         
@@ -171,6 +174,9 @@ class TransactionRepository:
         goal_id: str | None = None,
         subscription_id: str | None = None,
     ) -> int:
+        from beanie import PydanticObjectId
+        from beanie.operators import In
+
         conditions = [
             TransactionDocument.user_id == user_id,
             TransactionDocument.transaction_time >= start_date,
@@ -182,11 +188,11 @@ class TransactionRepository:
             conditions.append(TransactionDocument.direction == direction)
         if goal_id:
             conditions.append(TransactionDocument.goal_id == goal_id)
+        
         if subscription_id:
-            from beanie import PydanticObjectId
             try:
                 obj_id = PydanticObjectId(subscription_id)
-                conditions.append({"subscription_id": {"$in": [subscription_id, obj_id]}})
+                conditions.append(In(TransactionDocument.subscription_id, [subscription_id, obj_id]))
             except Exception:
                 conditions.append(TransactionDocument.subscription_id == subscription_id)
 

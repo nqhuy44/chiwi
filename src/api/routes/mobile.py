@@ -414,10 +414,15 @@ async def list_subscriptions(
         if last_charged and last_charged.tzinfo is None:
             last_charged = last_charged.replace(tzinfo=UTC)
 
+        from src.core.categories import resolve_merchant_icon
+        icons = _category_icon_map()
+        icon = resolve_merchant_icon(s.merchant_name, "Giải trí", icons)
+
         items.append(
             MobileSubscriptionItem(
                 id=str(s.id),
                 name=s.name,
+                icon=icon,
                 amount=amount,
                 period=period,
                 next_charge_date=ncd,
