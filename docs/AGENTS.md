@@ -25,8 +25,8 @@ flowchart TD
     DB --> RA
     DB --> AA
 
-    BA --> TG_NUDGE["📲 Nudge via Telegram"]
-    RA --> TG_REPORT["📈 Report via Telegram"]
+    BA --> TG_NUDGE["📲 Nudge via Telegram & Android"]
+    RA --> TG_REPORT["📈 Report via Telegram & Android"]
     AA --> TG_ANALYSIS["📊 Analysis via Telegram"]
 ```
 
@@ -167,7 +167,7 @@ flowchart TD
 | **LLM** | Gemini 2.5 Pro |
 | **Trigger** | Scheduled cron (daily) via `worker.py` OR Telegram `/nudge` command |
 | **Input** | Trigger payload + user profile from `config/user_profiles.json` |
-| **Output** | Personalized nudge sent via Telegram silent message; `NudgeDocument` persisted |
+| **Output** | Personalized nudge sent via Telegram silent message and Android Dashboard; `NudgeDocument` persisted |
 
 **Responsibilities**:
 - Load personalization profile (occupation, hobbies, tone, timezone) from config file

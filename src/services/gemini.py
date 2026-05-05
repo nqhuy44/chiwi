@@ -7,7 +7,7 @@ from typing import Any
 
 from google import genai
 from google.genai import types
-from google.genai.errors import ClientError
+from google.genai.errors import ClientError, ServerError
 
 from src.core.config import settings
 
@@ -81,9 +81,11 @@ class GeminiService:
                     ),
                 )
                 return (response.text or "").strip()
-            except ClientError as exc:
-                if exc.code == 429:
+            except (ClientError, ServerError) as exc:
+                # Retry on 429 (Resource Exhausted) or 503 (Service Unavailable)
+                if getattr(exc, "code", None) in [429, 503]:
                     delay = BASE_DELAY_SECONDS * (2 ** (attempt - 1))
+                    logger.warning("Gemini transient error (%s), retry %d/%d in %.1fs", getattr(exc, "code", None), attempt, MAX_RETRIES, delay)
                     await asyncio.sleep(delay)
                     continue
                 return ""
@@ -133,17 +135,18 @@ class GeminiService:
                 raw = (response.text or "").strip()
                 return json.loads(raw) if raw else {}
 
-            except ClientError as exc:
-                if exc.code == 429:
+            except (ClientError, ServerError) as exc:
+                status_code = getattr(exc, "code", None)
+                if status_code in [429, 503]:
                     delay = BASE_DELAY_SECONDS * (2 ** (attempt - 1))
                     logger.warning(
-                        "Gemini %s rate-limited (429), retry %d/%d in %.1fs",
-                        model, attempt, MAX_RETRIES, delay,
+                        "Gemini %s transient error (%s), retry %d/%d in %.1fs",
+                        model, status_code, attempt, MAX_RETRIES, delay,
                     )
                     last_error = exc
                     await asyncio.sleep(delay)
                     continue
-                logger.exception("Gemini %s client error (%s)", model, exc.code)
+                logger.exception("Gemini %s error (%s)", model, status_code)
                 return {}
 
             except json.JSONDecodeError:
@@ -194,16 +197,17 @@ class GeminiService:
                 raw = (response.text or "").strip()
                 return json.loads(raw) if raw else {}
 
-            except ClientError as exc:
-                if exc.code == 429:
+            except (ClientError, ServerError) as exc:
+                status_code = getattr(exc, "code", None)
+                if status_code in [429, 503]:
                     delay = BASE_DELAY_SECONDS * (2 ** (attempt - 1))
                     logger.warning(
-                        "Gemini %s audio rate-limited (429), retry %d/%d in %.1fs",
-                        model, attempt, MAX_RETRIES, delay,
+                        "Gemini %s audio transient error (%s), retry %d/%d in %.1fs",
+                        model, status_code, attempt, MAX_RETRIES, delay,
                     )
                     await asyncio.sleep(delay)
                     continue
-                logger.exception("Gemini %s audio client error (%s)", model, exc.code)
+                logger.exception("Gemini %s audio error (%s)", model, status_code)
                 return {}
 
             except json.JSONDecodeError:

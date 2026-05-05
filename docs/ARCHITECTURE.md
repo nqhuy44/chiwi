@@ -204,6 +204,21 @@ chiwi/
 └── CLAUDE.md
 ```
 
+## Error Handling & Reliability
+
+### Transient Error Handling
+ChiWi implements a robust retry strategy for external dependencies, particularly the **Gemini API**.
+- **Retryable Errors**: `429 (Rate Limit)` and `503 (Service Unavailable)`.
+- **Strategy**: Exponential backoff with jitter (initial delay 1s, max 5 retries).
+- **Fallback Logic**: If Gemini remains unavailable after all retries, the system falls back to heuristic-based classification or historical data to ensure the transaction is recorded even if not perfectly tagged.
+
+### Classification & Tagging Fallbacks
+The **Tagging Agent** follows a multi-tier resolution strategy:
+1. **History Check**: Matches the merchant name against the user's previous transactions.
+2. **Subscription Context**: If a transaction is linked to a subscription ID, the system prioritizes the category previously assigned to that subscription.
+3. **AI Inference**: Invokes Gemini for zero-shot classification if history is insufficient.
+4. **Final Fallback**: Assigns `"Khác"` (Other) and marks the transaction as `agent_confidence="low"`, allowing the user to correct it later.
+
 ## Security Model
 
 | Layer | Mechanism |

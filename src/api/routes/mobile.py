@@ -107,6 +107,7 @@ async def list_transactions(
     offset_days: int = Query(0, ge=0),
     window_size: int = Query(7, ge=1),
     goal_id: str | None = Query(None),
+    subscription_id: str | None = Query(None),
 ) -> MobileTransactionListResponse:
     """Paginated transaction list. Supports both period labels, custom
     ISO8601 date ranges, or sliding time windows (offset_days/window_size)."""
@@ -152,6 +153,7 @@ async def list_transactions(
         limit=limit,
         after_id=cursor,
         goal_id=goal_id,
+        subscription_id=subscription_id,
     )
 
     total = await container.transaction_repo.count_in_period(
@@ -161,6 +163,7 @@ async def list_transactions(
         category_id=category,
         direction=direction,
         goal_id=goal_id,
+        subscription_id=subscription_id,
     )
 
     # Pagination logic
@@ -811,13 +814,26 @@ async def approve_pending(
     """Save a confirmed pending transaction to the database."""
     from src.db.models.transaction import TransactionDocument
     
+    merchant_name = body.merchant
+    category_id = body.category or "Khác"
+    tags = []
+
+    # If user provided a note, use it as merchant name and re-tag
+    if body.note and body.note.strip():
+        merchant_name = body.note.strip()
+        tag_result = await container.tagging_agent.tag(user_id, merchant_name)
+        category_id = tag_result.get("category", "Khác")
+        tags = tag_result.get("tags", [])
+        logger.info("Re-tagged transaction with note '%s' -> category: %s", merchant_name, category_id)
+
     txn_doc = TransactionDocument(
         user_id=user_id,
         amount=body.amount,
         currency="VND",
         direction=body.direction,
-        merchant_name=body.merchant,
-        category_id=body.category or "Khác",
+        merchant_name=merchant_name,
+        category_id=category_id,
+        tags=tags,
         transaction_time=datetime.now(UTC),
         agent_confidence="high",
         source="notification",

@@ -81,10 +81,15 @@ No query parameters.
   "periods": {
     "today": 150000,
     "yesterday": 120000,
+    "avg_7d": 135000,
     "this_week": 1200000,
     "last_week_same_period": 1100000,
+    "last_week_total": 1500000,
+    "avg_4w": 1250000,
     "this_month": 8000000,
-    "last_month_same_period": 7500000
+    "last_month_same_period": 7500000,
+    "last_month_total": 9000000,
+    "avg_3m": 8200000
   },
   "top_categories": [
     { "name": "Ăn uống", "icon": "🍔", "amount": 1800000, "tx_count": 21 },
@@ -163,6 +168,7 @@ Paginated transaction list with optional filters.
 | `limit` | int | `20` | Max items per page *within* a time block. |
 | `cursor` | string | — | `id` for next page *within* the same time block. |
 | `goal_id` | string | — | Filter by specific goal ID. |
+| `subscription_id` | string | — | Filter by specific subscription ID (e.g. for payment history). |
 
 #### Response `200`
 

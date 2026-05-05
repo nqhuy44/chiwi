@@ -78,17 +78,45 @@ class DashboardService:
     async def invalidate(self, user_id: str) -> None:
         await self._redis.invalidate_dashboard_cache(user_id)
 
+    async def _sum_outflow(self, user_id: str, start: datetime, end: datetime) -> float:
+        """Efficiently sum outflows in a range using MongoDB aggregation."""
+        pipeline = [
+            {
+                "$match": {
+                    "user_id": user_id,
+                    "direction": "outflow",
+                    "transaction_time": {"$gte": start, "$lte": end},
+                }
+            },
+            {"$group": {"_id": None, "total": {"$sum": "$amount"}}},
+        ]
+        res = await TransactionDocument.aggregate(pipeline).to_list(length=1)
+        return round(res[0]["total"]) if res else 0.0
+
     async def _compute(self, user_id: str) -> dict:
         icons = _category_icon_map()
         profile = await get_profile(user_id)
         tz = profile.timezone
 
+        # 1. Base ranges
         today_start, today_end = get_date_range("today", tz)
         yesterday_start, yesterday_end = get_date_range("yesterday", tz)
         week_start, week_end = get_date_range("this_week", tz)
         last_week_comp_start, last_week_comp_end = get_date_range("last_week_same_period", tz)
         month_start, month_end = get_date_range("this_month", tz)
         last_month_comp_start, last_month_comp_end = get_date_range("last_month_same_period", tz)
+
+        # 2. Extended ranges for New Insights
+        # - Avg 7d: last 7 days including today
+        avg7d_start = today_start - timedelta(days=6)
+        # - Full last week
+        last_week_start, last_week_end = get_date_range("last_week", tz)
+        # - Avg 4w: last 28 days including today
+        avg4w_start = today_start - timedelta(days=27)
+        # - Full last month
+        last_month_start, last_month_end = get_date_range("last_month", tz)
+        # - Avg 3m: approx last 90 days
+        avg3m_start = today_start - timedelta(days=89)
 
         (
             today_txns,
@@ -102,6 +130,12 @@ class DashboardService:
             budgets,
             upcoming_subs,
             just_paid_txns,
+            # New insight totals
+            total_7d,
+            total_last_week,
+            total_4w,
+            total_last_month,
+            total_3m,
         ) = await asyncio.gather(
             self._transaction_repo.find_by_user(user_id, today_start, today_end, limit=200),
             self._transaction_repo.find_by_user(user_id, yesterday_start, yesterday_end, limit=200),
@@ -116,6 +150,12 @@ class DashboardService:
             self._transaction_repo.find_by_user_with_subscription(
                 user_id, start_date=datetime.now(UTC) - timedelta(days=3), limit=10
             ),
+            # New insight totals
+            self._sum_outflow(user_id, avg7d_start, today_end),
+            self._sum_outflow(user_id, last_week_start, last_week_end),
+            self._sum_outflow(user_id, avg4w_start, today_end),
+            self._sum_outflow(user_id, last_month_start, last_month_end),
+            self._sum_outflow(user_id, avg3m_start, today_end),
         )
 
         top_categories = [
@@ -177,6 +217,12 @@ class DashboardService:
                 "last_week_same_period": _period_expense(last_week_comp_txns),
                 "this_month": _period_expense(month_txns),
                 "last_month_same_period": _period_expense(last_month_comp_txns),
+                # New insights
+                "avg_7d": round(total_7d / 7),
+                "avg_4w": round(total_4w / 4),
+                "avg_3m": round(total_3m / 3),
+                "last_week_total": total_last_week,
+                "last_month_total": total_last_month,
             },
             "top_categories": top_categories,
             "recent_transactions": [_fmt_txn(t, icons) for t in recent_txns],
@@ -184,6 +230,7 @@ class DashboardService:
             "upcoming_subscriptions": upcoming,
             "just_paid_subscriptions": just_paid,
         }
+
 
     async def _build_budget_alerts(
         self,

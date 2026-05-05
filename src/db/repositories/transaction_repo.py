@@ -119,6 +119,7 @@ class TransactionRepository:
         limit: int = 20,
         after_id: str | None = None,
         goal_id: str | None = None,
+        subscription_id: str | None = None,
     ) -> list[TransactionDocument]:
         conditions = [TransactionDocument.user_id == user_id]
         if start_date:
@@ -131,6 +132,8 @@ class TransactionRepository:
             conditions.append(TransactionDocument.direction == direction)
         if goal_id:
             conditions.append(TransactionDocument.goal_id == goal_id)
+        if subscription_id:
+            conditions.append(TransactionDocument.subscription_id == subscription_id)
         if after_id:
             try:
                 conditions.append(TransactionDocument.id < PydanticObjectId(after_id))
@@ -153,6 +156,7 @@ class TransactionRepository:
         category_id: str | None = None,
         direction: str | None = None,
         goal_id: str | None = None,
+        subscription_id: str | None = None,
     ) -> int:
         conditions = [
             TransactionDocument.user_id == user_id,
@@ -165,6 +169,8 @@ class TransactionRepository:
             conditions.append(TransactionDocument.direction == direction)
         if goal_id:
             conditions.append(TransactionDocument.goal_id == goal_id)
+        if subscription_id:
+            conditions.append(TransactionDocument.subscription_id == subscription_id)
 
         return await TransactionDocument.find(*conditions).count()
 

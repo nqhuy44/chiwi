@@ -53,6 +53,7 @@ erDiagram
         string merchant_name
         ObjectId category_id FK
         ObjectId goal_id FK
+        ObjectId subscription_id FK
         list tags
         datetime transaction_time
         string agent_confidence
@@ -174,12 +175,14 @@ Core financial data. Immutable after creation.
 | `agent_confidence` | string | `high` / `medium` / `low` |
 | `user_corrected` | bool | Whether user corrected AI classification |
 | `goal_id` | ObjectId | FK → `goals` |
+| `subscription_id` | ObjectId | FK → `subscriptions` |
 | `ai_metadata` | dict | Agent processing details |
 
 **Indexes**:
 - `user_id` + `transaction_time` (compound, primary query pattern)
 - `user_id` + `category_id` (compound, aggregation)
 - `user_id` + `goal_id` (compound, filtering)
+- `user_id` + `subscription_id` (compound, history tracking)
 - `merchant_name` (text index)
 
 ---

@@ -258,7 +258,7 @@ When no budget set for a category, show:
 ```
 ┌────────────────────────────────────────────┐
 │  ┌──┐  Mai                           ✕    │
-│  │🤖│  💡 Gợi ý chi tiêu                  │  ← nudge type badge
+│  │✨│  💡 Gợi ý chi tiêu                  │  ← nudge type badge (AutoAwesome icon)
 │  └──┘  ─────────────────────────────────  │
 │        "Tuần này bạn chi cà phê nhiều hơn  │
 │         tuần trước 40%. Mình thấy bạn hay  │
@@ -312,6 +312,22 @@ Used inside Kế hoạch screen for sub-navigation:
 - Underline indicator (not filled chip) for tab-style navigation
 - Active: `Primary` underline + `Primary` text
 - Inactive: `Neutral 600` text
+
+### 3.13 Mai Assistant Tab (Floating Overlay)
+
+A "peek-a-boo" tab that sits on the right edge of the screen, providing quick access to the AI Chat.
+
+```
+          ┌───────┐
+          │   ✨  │  ← AutoAwesome icon
+          │  Mai  │  ← Label
+          └───────┘
+```
+
+- **Shape**: Rounded square (12dp radius) with only Left-Top and Left-Bottom corners rounded.
+- **Position**: Floating on the right edge, vertically centered or slightly below.
+- **Visuals**: `Indigo` background, `White` icon/text.
+- **Behavior**: Persistent across main tabs. Tap to open `ChatBottomSheet`.
 
 ---
 
@@ -546,7 +562,7 @@ Slide up with `ModalBottomSheet`. On Android 12+ use `Notification.Builder.setFu
 │                                          │
 │  Lặp lại tháng sau?        [ ON  ]      │  ← auto-renew toggle
 │                                          │
-│  [ Xoá ngân sách ]    [ Lưu thay đổi ]  │
+│  [ Xoá ngân sách ]          [ Lưu ]      │
 └──────────────────────────────────────────┘
 ```
 

@@ -67,11 +67,12 @@ class ConversationalAgent:
         session_context: dict | None = None,
         user_timezone: str | None = None,
         profile: UserProfile | None = None,
+        concise: bool = False,
     ) -> IntentResult:
         """Process a text message and determine intent."""
-        logger.info("Processing message from user_id=%s", user_id)
+        logger.info("Processing message from user_id=%s (concise=%s)", user_id, concise)
 
-        prompt = self._build_prompt(user_timezone, profile)
+        prompt = self._build_prompt(user_timezone, profile, concise=concise)
 
         masked = mask_pii(message) if settings.pii_mask_enabled else message
         user_msg = f"<user_message>\n{masked}\n</user_message>"
@@ -133,7 +134,7 @@ class ConversationalAgent:
                 response_text="Xin lỗi, mình không hiểu ý bạn. Bạn thử nhắn chữ nhé?",
             )
 
-    def _build_prompt(self, user_timezone: str | None, profile: UserProfile | None) -> str:
+    def _build_prompt(self, user_timezone: str | None, profile: UserProfile | None, concise: bool = False) -> str:
         """Construct the system prompt with timezone, personality, and tone."""
         from src.core.profiles import build_personalized_prompt
         from zoneinfo import ZoneInfo
@@ -141,8 +142,16 @@ class ConversationalAgent:
         tz = ZoneInfo(user_timezone or settings.business_timezone)
         now_iso = datetime.now(tz).isoformat()
         
+        concise_instruction = (
+            "IMPORTANT: Be extremely concise. Use short sentences. "
+            "Optimized for small mobile screens. Keep replies under 15 words if possible."
+            if concise else ""
+        )
+        
+        full_prompt = SYSTEM_PROMPT_TEMPLATE.replace("{{CONCISE_INSTRUCTION}}", concise_instruction)
+        
         return build_personalized_prompt(
-            template=SYSTEM_PROMPT_TEMPLATE,
+            template=full_prompt,
             profile=profile or UserProfile(),
             current_timestamp=now_iso
         )

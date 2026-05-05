@@ -223,7 +223,8 @@ class Orchestrator:
             if not raw_text:
                 return {"status": "empty_message"}
             intent_result = await self._conversational.process_message(
-                message=raw_text, user_id=user_id, user_timezone=user_tz, profile=profile
+                message=raw_text, user_id=user_id, user_timezone=user_tz, profile=profile,
+                concise=(source == "android_chat")
             )
 
         if intent_result.intent == "request_report":
@@ -1428,6 +1429,13 @@ class Orchestrator:
             confidence="high",
         )
         tags_result = await self._tagging.enrich(transaction=parsed, user_id=user_id)
+        category_id = tags_result.get("category_name")
+        if category_id == "Khác":
+            # Try to inherit category from previous transactions of this subscription
+            prev_txns = await self._transaction_repo.find_by_subscription(user_id, sub_id, limit=1)
+            if prev_txns and prev_txns[0].category_id:
+                category_id = prev_txns[0].category_id
+                logger.info("Inherited category '%s' from previous subscription history for %s", category_id, sub.name)
 
         txn_doc = TransactionDocument(
             user_id=user_id,
@@ -1437,7 +1445,7 @@ class Orchestrator:
             direction="outflow",
             raw_text=payload.get("message", f"Thanh toán {sub.name}"),
             merchant_name=sub.merchant_name,
-            category_id=tags_result.get("category_name"),
+            category_id=category_id,
             tags=tags_result.get("tags", []),
             transaction_time=charged_at,
             agent_confidence="high",
@@ -1592,7 +1600,7 @@ class Orchestrator:
             profile = await get_profile(user_id)
             user_tz = profile.timezone or _settings.business_timezone
             
-            success = await self._subscription_repo.mark_charged(sub_id, user_id, charged_at, user_timezone=user_tz)
+            success = await self._subscription_repo.mark_charged(sub_id, user_id, transaction_time, user_timezone=user_tz)
             
             if transaction_id:
                 await self._transaction_repo.set_subscription_id(transaction_id, sub_id)
