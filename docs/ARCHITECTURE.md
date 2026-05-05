@@ -108,7 +108,8 @@ Six specialized agents. Each interaction is wrapped in a **Personalization Engin
 - **Android App**: Consumes the `/api/mobile/*` REST endpoints. Unified notification feed and pre-computed dashboard.
 - Endpoints: `/api/mobile/dashboard`, `/transactions`, `/budgets`, `/goals`, `/subscriptions`, `/nudges`, `/profile`.
 - `/api/mobile/goals/{id}/accumulate` allows explicit goal progress updates, creating isolated `savingflow` transactions that don't affect general income/expense reports.
-- `/api/mobile/subscriptions` returns `last_charged_at` alongside `next_charge_date` and `due_in_days`, enabling the Android app to derive upcoming-payment and recently-paid views client-side.
+- `/api/mobile/subscriptions` returns backend-resolved `icon` (emoji) alongside `last_charged_at`, `next_charge_date`, and `due_in_days`. The Android app prioritizes this server-side icon for cross-platform consistency.
+- Transactions can be filtered by `subscription_id`, ensuring that the subscription detail screen shows exactly the linked history even if merchant names differ (e.g., "Spotify" vs "Spotify Premium").
 
 ## Deployment Architecture
 
@@ -168,9 +169,9 @@ chiwi/
 │   │   ├── config.py
 │   │   ├── schemas.py
 │   │   ├── profiles.py     # Personalization engine (Persona Injection)
-│   │   ├── categories.py   # Category loader (config/categories.json)
+│   │   ├── categories.py   # Category loader + merchant-to-icon resolution
 │   │   ├── toon.py         # Token-optimised context encoder for LLM payloads
-│   │   ├── utils.py        # Timezone-aware date-range helpers
+│   │   ├── utils.py        # Naive UTC date-range helpers for MongoDB consistency
 │   │   ├── spending_avg.py # Per-category baseline averages (ask_spending_vs_avg + spike detection)
 │   │   └── dependencies.py
 │   ├── db/               # Database models and repositories
