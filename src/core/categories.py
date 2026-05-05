@@ -39,3 +39,27 @@ def load_categories() -> list[CategoryDocument]:
 def category_names() -> list[str]:
     """Return just the category names, in file order."""
     return [c.name for c in load_categories()]
+
+
+def resolve_merchant_icon(merchant_name: str | None, category_id: str | None, icons_map: dict[str, str]) -> str:
+    """Determine the best icon for a transaction: Brand-specific first, then Category icon."""
+    brand_icons = {
+        "spotify": "🎵",
+        "netflix": "🎬",
+        "youtube": "📺",
+        "icloud": "☁️",
+        "google one": "☁️",
+        "openai": "🤖",
+        "chatgpt": "🤖",
+        "claude": "🤖",
+        "adobe": "🎨",
+        "capcut": "🎬",
+        "canva": "🎨",
+    }
+    
+    merchant_key = (merchant_name or "").lower()
+    for brand, brand_icon in brand_icons.items():
+        if brand in merchant_key:
+            return brand_icon
+            
+    return icons_map.get(category_id or "Khác", "❓")

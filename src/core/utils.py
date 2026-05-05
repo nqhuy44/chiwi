@@ -164,7 +164,9 @@ def get_sliding_window(
     now_local = datetime.now(tz)
     
     # end_dt is 'now - offset_days'
-    end_local = now_local - timedelta(days=offset_days)
+    # Add a small buffer (1 hour) to ensure transactions created "just now" 
+    # are not excluded due to slight clock skews or processing delays.
+    end_local = now_local - timedelta(days=offset_days) + timedelta(hours=1)
     
     # start_dt is 'end_dt - window_size'
     start_local = end_local - timedelta(days=window_size)

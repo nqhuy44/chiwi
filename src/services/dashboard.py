@@ -35,13 +35,17 @@ def _period_expense(txns: list[TransactionDocument]) -> float:
 def _fmt_txn(doc: TransactionDocument, icons: dict[str, str]) -> dict:
     txn_id = str(doc.id)
     cat = doc.category_id or "Khác"
+    
+    from src.core.categories import resolve_merchant_icon
+    icon = resolve_merchant_icon(doc.merchant_name, cat, icons)
+
     return {
         "id": txn_id,
         "amount": doc.amount,
         "direction": doc.direction,
         "merchant": doc.merchant_name,
         "category": cat,
-        "icon": icons.get(cat, "❓"),
+        "icon": icon,
         "note": "",
         "timestamp": doc.transaction_time.isoformat() if doc.transaction_time else datetime.now(UTC).isoformat(),
         "locked": doc.locked,

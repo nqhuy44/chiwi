@@ -88,9 +88,16 @@ class TransactionRepository:
     async def find_by_subscription(
         self, user_id: str, subscription_id: str, limit: int = 50
     ) -> list[TransactionDocument]:
+        from beanie import PydanticObjectId
+        try:
+            obj_id = PydanticObjectId(subscription_id)
+            selector = {"subscription_id": {"$in": [subscription_id, obj_id]}}
+        except Exception:
+            selector = {"subscription_id": subscription_id}
+            
         return await TransactionDocument.find(
             TransactionDocument.user_id == user_id,
-            TransactionDocument.subscription_id == subscription_id
+            selector
         ).sort("-transaction_time").limit(limit).to_list()
 
     async def find_by_user_with_subscription(
@@ -133,7 +140,13 @@ class TransactionRepository:
         if goal_id:
             conditions.append(TransactionDocument.goal_id == goal_id)
         if subscription_id:
-            conditions.append(TransactionDocument.subscription_id == subscription_id)
+            from beanie import PydanticObjectId
+            try:
+                obj_id = PydanticObjectId(subscription_id)
+                conditions.append({"subscription_id": {"$in": [subscription_id, obj_id]}})
+            except Exception:
+                conditions.append(TransactionDocument.subscription_id == subscription_id)
+        
         if after_id:
             try:
                 conditions.append(TransactionDocument.id < PydanticObjectId(after_id))
@@ -170,7 +183,12 @@ class TransactionRepository:
         if goal_id:
             conditions.append(TransactionDocument.goal_id == goal_id)
         if subscription_id:
-            conditions.append(TransactionDocument.subscription_id == subscription_id)
+            from beanie import PydanticObjectId
+            try:
+                obj_id = PydanticObjectId(subscription_id)
+                conditions.append({"subscription_id": {"$in": [subscription_id, obj_id]}})
+            except Exception:
+                conditions.append(TransactionDocument.subscription_id == subscription_id)
 
         return await TransactionDocument.find(*conditions).count()
 

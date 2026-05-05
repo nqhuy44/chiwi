@@ -69,13 +69,17 @@ def _fmt_txn(doc: TransactionDocument, icons: dict[str, str]) -> MobileTransacti
     ts = doc.transaction_time or datetime.now(UTC)
     if ts.tzinfo is None:
         ts = ts.replace(tzinfo=UTC)
+    
+    from src.core.categories import resolve_merchant_icon
+    icon = resolve_merchant_icon(doc.merchant_name, cat, icons)
+
     return MobileTransactionItem(
         id=str(doc.id),
         amount=doc.amount,
         direction=doc.direction,
-        merchant=doc.merchant_name,
+        merchant=doc.merchant_name or "N/A",
         category=cat,
-        icon=icons.get(cat, "❓"),
+        icon=icon,
         note="",
         timestamp=ts,
         locked=doc.locked,
@@ -123,11 +127,10 @@ async def list_transactions(
     f_start, f_end = resolve_date_range(period, start_date, end_date, tz)
 
     # 2. Resolve Sliding Window Range (The "viewing" block)
+    # Default to window_size (usually 7 days) to allow scrolling for more history.
     w_start, w_end = get_sliding_window(offset_days, window_size, tz)
 
     # 3. Intersect Filter and Window
-    # start_dt = Max(Filter_Start, Window_Start)
-    # end_dt = Min(Filter_End, Window_End)
     start_dt = max(f_start, w_start) if f_start else w_start
     end_dt = min(f_end, w_end) if f_end else w_end
 
